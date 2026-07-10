@@ -1,0 +1,4 @@
+torch>=2.0
+torchvision>=0.15
+pytorch-lightning>=2.0
+wandb>=0.15
