@@ -1,0 +1,61 @@
+# Large data files
+*.csv
+*.tsv
+*.parquet
+*.feather
+*.arrow
+*.h5
+*.hdf5
+*.nc
+*.zarr
+
+# Model checkpoints and weights
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.pb
+*.pkl
+*.pickle
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.7z
+*.rar
+
+# Images and videos
+*.tif
+*.tiff
+*.bmp
+*.avi
+*.mp4
+*.mov
+
+# Binary / compiled
+*.so
+*.dll
+*.dylib
+*.o
+*.pyc
+__pycache__/
+
+# Environment
+.env
+.venv/
+venv/
+env/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Logs
+*.log
