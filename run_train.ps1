@@ -20,6 +20,7 @@ param(
     [int]   $Epochs      = 100,
     [string]$Precision   = "16-mixed",
     [string]$Project     = "tilted-vae-myzus",
+    [string]$Entity      = "your-wandb-entity",
     [string]$RunName     = "vae-run",
     [string]$OutputDir   = "results"
 )
@@ -52,5 +53,6 @@ python "$ScriptDir\train.py" `
     --anneal_x0       2500 `
     --au_threshold    0.01 `
     --project         "$Project" `
+    --entity          "$Entity" `
     --run_name        "$RunName" `
     --output_dir      "$OutputDir"
