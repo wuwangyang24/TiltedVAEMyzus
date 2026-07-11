@@ -22,7 +22,10 @@ param(
     [string]$Project     = "tilted-vae-myzus",
     [string]$Entity      = "your-wandb-entity",
     [string]$RunName     = "vae-run",
-    [string]$OutputDir   = "results"
+    [string]$OutputDir   = "results",
+    # SECURITY: this key is hard-coded below. Do NOT commit this file to git
+    # once you fill it in (add run_train.ps1 to .gitignore).
+    [string]$WandbApiKey = "PASTE_YOUR_WANDB_API_KEY_HERE"
 )
 
 $ErrorActionPreference = "Stop"
@@ -31,8 +34,13 @@ $ErrorActionPreference = "Stop"
 $ScriptDir  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $IndexCache = Join-Path $ScriptDir "cache\image_index.npy"
 
+# Set the W&B API key for this run if provided via the parameter.
+if ($WandbApiKey) {
+    $env:WANDB_API_KEY = $WandbApiKey
+}
+
 if (-not $env:WANDB_API_KEY) {
-    Write-Warning "WANDB_API_KEY is not set. Set it with `$env:WANDB_API_KEY = '<key>'` or run `wandb login` first."
+    Write-Warning "WANDB_API_KEY is not set. Pass -WandbApiKey '<key>', set `$env:WANDB_API_KEY, or run `wandb login` first."
 }
 
 python "$ScriptDir\train.py" `
