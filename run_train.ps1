@@ -17,7 +17,7 @@ param(
     [int]   $MaxValSamples = 500000,
     [int]   $LatentDim   = 128,
     [double]$Lr          = 1e-4,
-    [int]   $Epochs      = 100,
+    [int]   $Epochs      = 50,
     [string]$Precision   = "16-mixed",
     [string]$Project     = "tiltedvae-myzus",
     [string]$Entity      = "wangyang-wu-bayer",
