@@ -17,7 +17,7 @@ close together (the clouds should overlap and the paired distances should be
 small), rather than separating by scale.
 
 Examples:
-    python permutation_test.py --data_dir /path/to/images \
+    python permutation_test_size.py --data_dir /path/to/images \
         --checkpoint results/checkpoints/last.ckpt --model tilted \
         --size_pool 300 --method umap
 """
