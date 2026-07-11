@@ -3,10 +3,10 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 import torch
-from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 import pytorch_lightning as pl
 import torchvision.transforms as T
+from torchvision.io import ImageReadMode, read_image
 
 # Common raster image extensions to pick up when walking the dataset folder.
 IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp")
@@ -37,15 +37,16 @@ class ImageFolderFlat(Dataset):
                  in_channels: int = 3) -> None:
         self.paths = paths
         self.transform = transform
-        self.mode = "L" if in_channels == 1 else "RGB"
+        self.mode = ImageReadMode.GRAY if in_channels == 1 else ImageReadMode.RGB
 
     def __len__(self) -> int:
         return len(self.paths)
 
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, int]:
-        with Image.open(self.paths[index]) as img:
-            img = img.convert(self.mode)
-            tensor = self.transform(img)
+        # read_image returns a uint8 [C, H, W] tensor; the transform resizes,
+        # crops, and converts it to a float tensor in [0, 1].
+        img = read_image(self.paths[index], mode=self.mode)
+        tensor = self.transform(img)
         return tensor, 0
 
 
@@ -93,13 +94,12 @@ class VAEDataModule(pl.LightningDataModule):
         self.val_dataset: Optional[Dataset] = None
 
     def _build_transform(self) -> T.Compose:
-        # Resize the shorter side then center-crop to a fixed square so the
-        # encoder always sees ``img_size x img_size`` inputs. ToTensor scales
-        # pixels to [0, 1], matching the decoder's Sigmoid output range.
+        # Resize directly to a fixed square so the encoder always sees
+        # ``img_size x img_size`` inputs. ConvertImageDtype scales uint8 pixels
+        # to [0, 1], matching the decoder's Sigmoid output.
         return T.Compose([
-            T.Resize(self.img_size),
-            T.CenterCrop(self.img_size),
-            T.ToTensor(),
+            T.Resize((self.img_size, self.img_size), antialias=True),
+            T.ConvertImageDtype(torch.float32),
         ])
 
     def _load_paths(self) -> List[str]:
