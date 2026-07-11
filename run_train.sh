@@ -33,6 +33,11 @@ OUTPUT_DIR="${OUTPUT_DIR:-results}"
 # Hard-coded W&B API key (rotate if leaked; keep this file out of git).
 export WANDB_API_KEY="${WANDB_API_KEY:-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}"
 
+# W&B sync mode. Use "offline" to log locally without network (avoids the
+# training hang from a blocked/slow connection); sync later with `wandb sync`.
+# Set WANDB_MODE=online to stream live.
+export WANDB_MODE="${WANDB_MODE:-offline}"
+
 # Resolve paths relative to this script.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INDEX_CACHE="${SCRIPT_DIR}/cache/image_index.npy"

@@ -141,7 +141,7 @@ def main() -> None:
         entity=args.entity,
         tags=args.tags,
         save_dir=args.output_dir,
-        log_model=True,
+        log_model=False,
     )
     wandb_logger.log_hyperparams(vars(args))
 
