@@ -160,9 +160,9 @@ def sample_paths_by_size(data_dir: str, n_samples: int, seed: int,
     """Sample ``n_samples`` images whose object size (non-black pixel count) is
     as similar as possible.
 
-    A random pool of up to ``size_pool`` images is measured, then the contiguous
-    window of ``n_samples`` images whose areas are closest together, centered on
-    the requested ``size_percentile``, is returned.
+    A random pool of up to ``size_pool`` images is measured, then the
+    ``n_samples`` images whose areas are closest to the target point (the
+    ``size_percentile`` of the measured pool) are returned.
     """
     paths = _scan_images(data_dir)
     if not paths:
@@ -178,19 +178,14 @@ def sample_paths_by_size(data_dir: str, n_samples: int, seed: int,
         foreground_area(p, in_channels, black_threshold) for p in pool_paths
     ])
 
-    # Sort candidates by area and take a contiguous window (most similar sizes)
-    # centered on the requested percentile.
-    order = np.argsort(areas)
-    sorted_areas = areas[order]
+    # Pick the n images whose area is closest to the target point (the requested
+    # percentile of the measured pool).
     n = min(n_samples, pool_n)
-
-    target = np.percentile(sorted_areas, size_percentile)
-    center = int(np.searchsorted(sorted_areas, target))
-    start = int(np.clip(center - n // 2, 0, pool_n - n))
-    window = order[start:start + n]
+    target = np.percentile(areas, size_percentile)
+    window = np.argsort(np.abs(areas - target))[:n]
 
     selected_areas = areas[window]
-    print(f"[size] Selected {n} images with similar object size: "
+    print(f"[size] Selected {n} images closest to target area {target:.0f} px: "
           f"area = {selected_areas.mean():.0f} +/- {selected_areas.std():.0f} px "
           f"(min {selected_areas.min()}, max {selected_areas.max()})")
 
