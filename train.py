@@ -30,6 +30,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--kld_weight", type=float, default=0.005,
                         help="Weight for the KL term (M_N); ~ batch_size / dataset_size")
+    parser.add_argument("--anneal_kld", action="store_true",
+                        help="Enable sigmoid annealing of the KL weight over training steps")
+    parser.add_argument("--anneal_k", type=float, default=0.0025,
+                        help="Steepness of the sigmoid KL annealing schedule")
+    parser.add_argument("--anneal_x0", type=int, default=2500,
+                        help="Global step at which the sigmoid schedule reaches its midpoint")
+    parser.add_argument("--au_threshold", type=float, default=0.01,
+                        help="Posterior-mean variance threshold for counting active units (AU)")
     parser.add_argument("--scheduler_gamma", type=float, default=0.95)
     parser.add_argument("--epochs", type=int, default=100)
 
@@ -99,6 +107,10 @@ def main() -> None:
         weight_decay=args.weight_decay,
         kld_weight=args.kld_weight,
         scheduler_gamma=args.scheduler_gamma,
+        anneal_kld=args.anneal_kld,
+        anneal_k=args.anneal_k,
+        anneal_x0=args.anneal_x0,
+        au_threshold=args.au_threshold,
     )
 
     # Logger (Weights & Biases)
