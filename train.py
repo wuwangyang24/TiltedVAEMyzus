@@ -6,7 +6,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
-from Models import VAE
+from Models import VAE, TiltedVAE
 from dataset import VAEDataModule
 from experiment import VAEExperiment
 
@@ -34,8 +34,15 @@ def parse_args() -> argparse.Namespace:
                              "validation fast on very large datasets")
 
     # Model
+    parser.add_argument("--model", type=str, default="vae",
+                        choices=["vae", "tilted"],
+                        help="Which model to train: 'vae' (standard VAE) or "
+                             "'tilted' (TiltedVAE with an exponentially tilted prior)")
     parser.add_argument("--in_channels", type=int, default=3)
     parser.add_argument("--latent_dim", type=int, default=128)
+    parser.add_argument("--tau", type=float, default=None,
+                        help="Tilt parameter for the TiltedVAE prior (only used when "
+                             "--model tilted). Defaults to sqrt(2 * latent_dim)")
 
     # Optimization
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -116,11 +123,19 @@ def main() -> None:
     )
 
     # Model
-    model = VAE(
-        in_channels=args.in_channels,
-        latent_dim=args.latent_dim,
-        img_size=args.img_size,
-    )
+    if args.model == "tilted":
+        model = TiltedVAE(
+            in_channels=args.in_channels,
+            latent_dim=args.latent_dim,
+            tau=args.tau,
+            img_size=args.img_size,
+        )
+    else:
+        model = VAE(
+            in_channels=args.in_channels,
+            latent_dim=args.latent_dim,
+            img_size=args.img_size,
+        )
 
     experiment = VAEExperiment(
         model=model,
@@ -149,7 +164,7 @@ def main() -> None:
     ckpt_dir = os.path.join(args.output_dir, "checkpoints")
     checkpoint_callback = ModelCheckpoint(
         dirpath=ckpt_dir,
-        filename="vae-{epoch:02d}-{val_loss:.2f}",
+        filename=args.model + "-{epoch:02d}-{val_loss:.2f}",
         monitor="val_loss",
         mode="min",
         save_top_k=3,

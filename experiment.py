@@ -1,11 +1,11 @@
 import math
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 import torch
 import pytorch_lightning as pl
 import torchvision.utils as vutils
 
-from Models import VAE
+from Models import VAE, TiltedVAE
 
 
 class VAEExperiment(pl.LightningModule):
@@ -33,7 +33,7 @@ class VAEExperiment(pl.LightningModule):
     """
 
     def __init__(self,
-                 model: VAE,
+                 model: Union[VAE, TiltedVAE],
                  lr: float = 1e-3,
                  weight_decay: float = 0.0,
                  kld_weight: float = 0.005,
