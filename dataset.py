@@ -13,14 +13,23 @@ IMG_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff", ".we
 
 
 def _scan_images(root: str) -> list:
-    """Recursively collect image paths (relative to ``root``) using os.scandir."""
+    """Recursively collect image paths (relative to ``root``) using os.scandir.
+
+    Follows directory symlinks (common on SageMaker/mounted storage) while
+    guarding against symlink loops via visited real paths.
+    """
     paths = []
+    seen_dirs = set()
     stack = [root]
     while stack:
         current = stack.pop()
+        real = os.path.realpath(current)
+        if real in seen_dirs:
+            continue
+        seen_dirs.add(real)
         with os.scandir(current) as it:
             for entry in it:
-                if entry.is_dir(follow_symlinks=False):
+                if entry.is_dir(follow_symlinks=True):
                     stack.append(entry.path)
                 elif entry.name.lower().endswith(IMG_EXTENSIONS):
                     paths.append(os.path.relpath(entry.path, root))
@@ -53,6 +62,12 @@ class RecursiveImageDataset(Dataset):
         if index_cache and os.path.isfile(index_cache):
             paths = np.load(index_cache, allow_pickle=False)
         else:
+            if not os.path.isdir(root):
+                raise RuntimeError(
+                    f"Data directory does not exist: {root!r} "
+                    f"(resolved to {os.path.abspath(root)!r}, cwd={os.getcwd()!r}). "
+                    f"Pass an absolute --data_dir."
+                )
             paths = np.asarray(_scan_images(root))
             if index_cache:
                 os.makedirs(os.path.dirname(index_cache) or ".", exist_ok=True)
@@ -62,7 +77,11 @@ class RecursiveImageDataset(Dataset):
         self.paths = paths
 
         if len(self.paths) == 0:
-            raise RuntimeError(f"No images found under {root!r}")
+            raise RuntimeError(
+                f"No images found under {root!r} "
+                f"(resolved to {os.path.abspath(root)!r}). "
+                f"Supported extensions: {', '.join(IMG_EXTENSIONS)}."
+            )
 
     def __len__(self) -> int:
         return len(self.paths)
