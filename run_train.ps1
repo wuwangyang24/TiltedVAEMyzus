@@ -11,12 +11,12 @@
 param(
     [string]$DataDir     = "../DATA/",
     [int]   $ImgSize     = 96,
-    [int]   $BatchSize   = 1024,
+    [int]   $BatchSize   = 512,
     [int]   $NumWorkers  = 8,
     [double]$ValSplit    = 0.05,
     [int]   $MaxValSamples = 500000,
     [int]   $LatentDim   = 128,
-    [double]$Lr          = 1e-3,
+    [double]$Lr          = 1e-4,
     [int]   $Epochs      = 100,
     [string]$Precision   = "16-mixed",
     [string]$Project     = "tiltedvae-myzus",
@@ -57,8 +57,8 @@ python "$ScriptDir\train.py" `
     --precision       $Precision `
     --anneal_kld `
     --anneal_end      1.0 `
-    --anneal_k        0.0025 `
-    --anneal_x0       2500 `
+    --anneal_k        3.5e-5 `
+    --anneal_x0       200000 `
     --au_threshold    0.01 `
     --project         "$Project" `
     --entity          "$Entity" `

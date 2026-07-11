@@ -50,8 +50,8 @@ python "${SCRIPT_DIR}/train.py" \
     --precision       "${PRECISION}" \
     --anneal_kld \
     --anneal_end      1.0 \
-    --anneal_k        0.0025 \
-    --anneal_x0       2500 \
+    --anneal_k        3.5e-5 \
+    --anneal_x0       200000 \
     --au_threshold    0.01 \
     --project         "${PROJECT}" \
     --entity          "${ENTITY}" \
