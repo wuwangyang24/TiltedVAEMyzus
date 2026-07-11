@@ -10,6 +10,11 @@ from Models import VAE
 from dataset import VAEDataModule
 from experiment import VAEExperiment
 
+# Use file-system based tensor sharing to avoid /dev/shm exhaustion, which
+# otherwise hangs DataLoader workers in containers with a small shared-memory
+# mount (e.g. Docker/SageMaker default of 64MB).
+torch.multiprocessing.set_sharing_strategy("file_system")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a Convolutional VAE with PyTorch Lightning + W&B")
