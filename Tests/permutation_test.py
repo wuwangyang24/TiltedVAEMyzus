@@ -66,6 +66,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
 
+    # Object-size filtering (images have a black background, so the object
+    # "size" is approximated by the number of non-black foreground pixels).
+    parser.add_argument("--match_size", action="store_true",
+                        help="Only sample images whose object size (non-black "
+                             "pixel count) is very similar")
+    parser.add_argument("--black_threshold", type=int, default=10,
+                        help="A pixel counts as foreground if its max channel "
+                             "value exceeds this (0-255)")
+    parser.add_argument("--size_pool", type=int, default=2000,
+                        help="Number of random candidate images to measure when "
+                             "--match_size is set (bounds the scanning cost)")
+    parser.add_argument("--size_percentile", type=float, default=50.0,
+                        help="Center of the object-size window to select, as a "
+                             "percentile of the measured pool (0-100)")
+
     # Dimensionality reduction / output
     parser.add_argument("--method", type=str, default="pca",
                         choices=["pca", "tsne", "umap"],
@@ -119,6 +134,16 @@ def load_checkpoint(model: torch.nn.Module, ckpt_path: str) -> None:
               f"{' ...' if len(unexpected) > 5 else ''}")
 
 
+def foreground_area(path: str, in_channels: int, black_threshold: int) -> int:
+    """Count the non-black (foreground) pixels of an image as a proxy for the
+    object's size. The background is assumed to be black, so a pixel is treated
+    as foreground when its brightest channel exceeds ``black_threshold``."""
+    mode = ImageReadMode.GRAY if in_channels == 1 else ImageReadMode.RGB
+    img = read_image(path, mode=mode)          # uint8 [C, H, W]
+    brightness = img.amax(dim=0)               # [H, W] max over channels
+    return int((brightness > black_threshold).sum().item())
+
+
 def sample_paths(data_dir: str, n_samples: int, seed: int) -> List[str]:
     paths = _scan_images(data_dir)
     if not paths:
@@ -127,6 +152,49 @@ def sample_paths(data_dir: str, n_samples: int, seed: int) -> List[str]:
     n = min(n_samples, len(paths))
     idx = rng.choice(len(paths), size=n, replace=False)
     return [paths[i] for i in idx]
+
+
+def sample_paths_by_size(data_dir: str, n_samples: int, seed: int,
+                         in_channels: int, black_threshold: int,
+                         size_pool: int, size_percentile: float) -> List[str]:
+    """Sample ``n_samples`` images whose object size (non-black pixel count) is
+    as similar as possible.
+
+    A random pool of up to ``size_pool`` images is measured, then the contiguous
+    window of ``n_samples`` images whose areas are closest together, centered on
+    the requested ``size_percentile``, is returned.
+    """
+    paths = _scan_images(data_dir)
+    if not paths:
+        raise RuntimeError(f"No images found under '{data_dir}'.")
+
+    rng = np.random.default_rng(seed)
+    pool_n = min(size_pool, len(paths))
+    pool_idx = rng.choice(len(paths), size=pool_n, replace=False)
+    pool_paths = [paths[i] for i in pool_idx]
+
+    print(f"[size] Measuring foreground area of {pool_n} candidate images...")
+    areas = np.array([
+        foreground_area(p, in_channels, black_threshold) for p in pool_paths
+    ])
+
+    # Sort candidates by area and take a contiguous window (most similar sizes)
+    # centered on the requested percentile.
+    order = np.argsort(areas)
+    sorted_areas = areas[order]
+    n = min(n_samples, pool_n)
+
+    target = np.percentile(sorted_areas, size_percentile)
+    center = int(np.searchsorted(sorted_areas, target))
+    start = int(np.clip(center - n // 2, 0, pool_n - n))
+    window = order[start:start + n]
+
+    selected_areas = areas[window]
+    print(f"[size] Selected {n} images with similar object size: "
+          f"area = {selected_areas.mean():.0f} +/- {selected_areas.std():.0f} px "
+          f"(min {selected_areas.min()}, max {selected_areas.max()})")
+
+    return [pool_paths[i] for i in window]
 
 
 def build_transforms(img_size: int, scale: float):
@@ -266,7 +334,12 @@ def main() -> None:
     model.eval().to(device)
 
     # Sample images and build the three scaled views
-    paths = sample_paths(args.data_dir, args.n_samples, args.seed)
+    if args.match_size:
+        paths = sample_paths_by_size(
+            args.data_dir, args.n_samples, args.seed, args.in_channels,
+            args.black_threshold, args.size_pool, args.size_percentile)
+    else:
+        paths = sample_paths(args.data_dir, args.n_samples, args.seed)
     n = len(paths)
     print(f"[data] Sampled {n} images from '{args.data_dir}'")
 
