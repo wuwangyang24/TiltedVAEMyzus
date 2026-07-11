@@ -1,6 +1,7 @@
 import argparse
 import os
 
+import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
@@ -15,11 +16,17 @@ def parse_args() -> argparse.Namespace:
 
     # Data
     parser.add_argument("--data_dir", type=str, required=True,
-                        help="Path to the image dataset (ImageFolder layout)")
+                        help="Path to the image dataset (any nested folder layout)")
     parser.add_argument("--img_size", type=int, default=96, help="Square image size")
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--val_split", type=float, default=0.1)
+    parser.add_argument("--index_cache", type=str, default=None,
+                        help="Optional .npy path to cache the scanned image list "
+                             "(avoids re-walking huge datasets each run)")
+    parser.add_argument("--max_val_samples", type=int, default=None,
+                        help="Cap the validation subset size (e.g. 20000) to keep "
+                             "validation fast on very large datasets")
 
     # Model
     parser.add_argument("--in_channels", type=int, default=3)
@@ -44,7 +51,10 @@ def parse_args() -> argparse.Namespace:
     # Trainer / hardware
     parser.add_argument("--accelerator", type=str, default="auto")
     parser.add_argument("--devices", type=str, default="auto")
-    parser.add_argument("--precision", type=str, default="32-true")
+    parser.add_argument("--precision", type=str, default="16-mixed",
+                        help="Lightning precision (e.g. 16-mixed, bf16-mixed, 32-true)")
+    parser.add_argument("--deterministic", action="store_true",
+                        help="Force deterministic algorithms (reproducible but slower)")
     parser.add_argument("--seed", type=int, default=42)
 
     # Logging / checkpoints
@@ -85,6 +95,10 @@ def main() -> None:
     pl.seed_everything(args.seed, workers=True)
     ensure_wandb_login()
 
+    # Inputs are fixed-size, so let cuDNN pick the fastest conv algorithms.
+    if not args.deterministic:
+        torch.backends.cudnn.benchmark = True
+
     # Data
     datamodule = VAEDataModule(
         data_dir=args.data_dir,
@@ -92,6 +106,8 @@ def main() -> None:
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         val_split=args.val_split,
+        index_cache=args.index_cache,
+        max_val_samples=args.max_val_samples,
     )
 
     # Model
@@ -145,7 +161,7 @@ def main() -> None:
         logger=wandb_logger,
         callbacks=[checkpoint_callback, lr_monitor],
         log_every_n_steps=10,
-        deterministic=True,
+        deterministic=args.deterministic,
     )
 
     trainer.fit(experiment, datamodule=datamodule)

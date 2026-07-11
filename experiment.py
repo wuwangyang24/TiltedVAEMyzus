@@ -57,6 +57,9 @@ class VAEExperiment(pl.LightningModule):
         # Buffers for aggregating latent statistics across a validation epoch.
         self._val_mus: List[torch.Tensor] = []
         self._val_kld_per_dim: List[torch.Tensor] = []
+        # Fixed batch (on CPU) reused for image logging to avoid rebuilding the
+        # val DataLoader every epoch.
+        self._log_images_batch: torch.Tensor = None
         # Save hyperparameters (excluding the model object) for reproducibility.
         self.save_hyperparameters(ignore=["model"])
 
@@ -106,8 +109,8 @@ class VAEExperiment(pl.LightningModule):
             on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
         )
         # Accumulate latent statistics for epoch-level metrics (KL per dim, AU).
-        self._val_mus.append(mu.detach())
-        self._val_kld_per_dim.append(kld_per_dim.detach())
+        self._val_mus.append(mu.detach().cpu())
+        self._val_kld_per_dim.append(kld_per_dim.detach().cpu())
         return loss_dict["loss"]
 
     def on_validation_epoch_end(self) -> None:
@@ -156,9 +159,13 @@ class VAEExperiment(pl.LightningModule):
         if not hasattr(self.logger, "experiment"):
             return
 
-        val_loader = self.trainer.datamodule.val_dataloader()
-        images, _ = next(iter(val_loader))
-        images = images[: self.num_samples].to(self.device)
+        # Fetch a fixed batch once and reuse it, so we don't rebuild the val
+        # DataLoader (and re-spawn workers) on every validation epoch.
+        if self._log_images_batch is None:
+            val_loader = self.trainer.datamodule.val_dataloader()
+            images, _ = next(iter(val_loader))
+            self._log_images_batch = images[: self.num_samples].clone()
+        images = self._log_images_batch.to(self.device)
 
         recons = self.model.generate(images)
         samples = self.model.sample(self.num_samples, self.device)
