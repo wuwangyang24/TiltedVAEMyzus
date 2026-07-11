@@ -6,7 +6,10 @@ import torch
 from torch.utils.data import DataLoader, Dataset, random_split
 import pytorch_lightning as pl
 from torchvision import transforms
-from PIL import Image
+from PIL import Image, ImageFile
+
+# Tolerate slightly truncated files instead of hanging/erroring on read.
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 IMG_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff", ".webp")
@@ -93,7 +96,15 @@ class RecursiveImageDataset(Dataset):
 
     def __getitem__(self, index: int):
         path = os.path.join(self.root, str(self.paths[index]))
-        image = Image.open(path).convert("RGB")
+        try:
+            with Image.open(path) as img:
+                image = img.convert("RGB")
+        except Exception as exc:
+            # Don't hang/crash the whole run on one bad file: log it and fall
+            # back to the next image so training can continue.
+            print(f"[RecursiveImageDataset] Skipping unreadable image "
+                  f"{path!r}: {exc}", flush=True)
+            return self.__getitem__((index + 1) % len(self.paths))
         if self.transform is not None:
             image = self.transform(image)
         # Return a dummy label of 0 to stay compatible with (images, _) unpacking.
