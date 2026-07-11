@@ -20,14 +20,16 @@ BATCH_SIZE="${BATCH_SIZE:-512}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 VAL_SPLIT="${VAL_SPLIT:-0.05}"
 MAX_VAL_SAMPLES="${MAX_VAL_SAMPLES:-500000}"
+MODEL="${MODEL:-vae}"
 LATENT_DIM="${LATENT_DIM:-128}"
+TAU="${TAU:-}"
 LR="${LR:-1e-3}"
 KLD_WEIGHT="${KLD_WEIGHT:-0.005}"
 EPOCHS="${EPOCHS:-50}"
 PRECISION="${PRECISION:-16-mixed}"
 PROJECT="${PROJECT:-tilted-vae-myzus}"
 ENTITY="${ENTITY:-wangyang-wu-bayer}"
-RUN_NAME="${RUN_NAME:-vae-run}"
+RUN_NAME="${RUN_NAME:-${MODEL}-run}"
 OUTPUT_DIR="${OUTPUT_DIR:-results}"
 
 # Hard-coded W&B API key (rotate if leaked; keep this file out of git).
@@ -42,6 +44,12 @@ export WANDB_MODE="${WANDB_MODE:-offline}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INDEX_CACHE="${SCRIPT_DIR}/cache/image_index.npy"
 
+# Pass --tau only when it is set (TiltedVAE defaults to sqrt(2 * latent_dim)).
+TAU_ARG=()
+if [[ -n "${TAU}" ]]; then
+    TAU_ARG=(--tau "${TAU}")
+fi
+
 python "${SCRIPT_DIR}/train.py" \
     --data_dir        "${DATA_DIR}" \
     --img_size        "${IMG_SIZE}" \
@@ -50,7 +58,9 @@ python "${SCRIPT_DIR}/train.py" \
     --val_split       "${VAL_SPLIT}" \
     --max_val_samples "${MAX_VAL_SAMPLES}" \
     --index_cache     "${INDEX_CACHE}" \
+    --model           "${MODEL}" \
     --latent_dim      "${LATENT_DIM}" \
+    "${TAU_ARG[@]}" \
     --lr              "${LR}" \
     --kld_weight      "${KLD_WEIGHT}" \
     --epochs          "${EPOCHS}" \
