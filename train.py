@@ -43,6 +43,8 @@ def parse_args() -> argparse.Namespace:
                         help="Steepness of the sigmoid KL annealing schedule")
     parser.add_argument("--anneal_x0", type=int, default=2500,
                         help="Global step at which the sigmoid schedule reaches its midpoint")
+    parser.add_argument("--anneal_end", type=float, default=1.0,
+                        help="Final KL weight the sigmoid annealing saturates to")
     parser.add_argument("--au_threshold", type=float, default=0.01,
                         help="Posterior-mean variance threshold for counting active units (AU)")
     parser.add_argument("--scheduler_gamma", type=float, default=0.95)
@@ -126,6 +128,7 @@ def main() -> None:
         anneal_kld=args.anneal_kld,
         anneal_k=args.anneal_k,
         anneal_x0=args.anneal_x0,
+        anneal_end=args.anneal_end,
         au_threshold=args.au_threshold,
     )
 
