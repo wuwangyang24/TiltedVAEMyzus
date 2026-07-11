@@ -2,25 +2,58 @@ import os
 from typing import Optional
 
 import torch
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Dataset, random_split
 import pytorch_lightning as pl
 from torchvision import transforms
-from torchvision.datasets import ImageFolder
+from PIL import Image
+
+
+IMG_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff", ".webp")
+
+
+class RecursiveImageDataset(Dataset):
+    """
+    Dataset that recursively collects every image under a root directory,
+    regardless of folder layout or nesting depth. Labels are not used.
+
+    Args:
+        root: root directory to search for images
+        transform: optional torchvision transform applied to each image
+    """
+
+    def __init__(self, root: str, transform=None) -> None:
+        super().__init__()
+        self.root = root
+        self.transform = transform
+
+        self.paths = []
+        for dirpath, _, filenames in os.walk(root):
+            for fname in filenames:
+                if fname.lower().endswith(IMG_EXTENSIONS):
+                    self.paths.append(os.path.join(dirpath, fname))
+        self.paths.sort()
+
+        if not self.paths:
+            raise RuntimeError(f"No images found under {root!r}")
+
+    def __len__(self) -> int:
+        return len(self.paths)
+
+    def __getitem__(self, index: int):
+        image = Image.open(self.paths[index]).convert("RGB")
+        if self.transform is not None:
+            image = self.transform(image)
+        # Return a dummy label of 0 to stay compatible with (images, _) unpacking.
+        return image, 0
 
 
 class VAEDataModule(pl.LightningDataModule):
     """
     LightningDataModule for loading raw RGB images for VAE training.
 
-    Expects a directory of images readable by torchvision's ImageFolder,
-    i.e. images organized into one or more class subfolders:
-
-        data_dir/
-            class_a/xxx.png
-            class_b/yyy.jpg
-            ...
-
-    Labels are ignored by the VAE; only the images are used.
+    Recursively collects every image under ``data_dir``, independent of the
+    folder structure or nesting depth (any subfolders are searched). Labels
+    are ignored by the VAE; only the images are used.
 
     Images are resized to `img_size` x `img_size` and scaled to [0, 1]
     (matching the Sigmoid output of the decoder).
@@ -61,7 +94,7 @@ class VAEDataModule(pl.LightningDataModule):
 
     def setup(self, stage: Optional[str] = None) -> None:
         transform = self._build_transform()
-        full_dataset = ImageFolder(root=self.data_dir, transform=transform)
+        full_dataset = RecursiveImageDataset(root=self.data_dir, transform=transform)
 
         val_len = int(len(full_dataset) * self.val_split)
         train_len = len(full_dataset) - val_len
