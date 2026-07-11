@@ -23,7 +23,7 @@ MAX_VAL_SAMPLES="${MAX_VAL_SAMPLES:-500000}"
 LATENT_DIM="${LATENT_DIM:-128}"
 LR="${LR:-1e-3}"
 KLD_WEIGHT="${KLD_WEIGHT:-0.005}"
-EPOCHS="${EPOCHS:-100}"
+EPOCHS="${EPOCHS:-50}"
 PRECISION="${PRECISION:-16-mixed}"
 PROJECT="${PROJECT:-tilted-vae-myzus}"
 ENTITY="${ENTITY:-wangyang-wu-bayer}"
@@ -57,7 +57,7 @@ python "${SCRIPT_DIR}/train.py" \
     --precision       "${PRECISION}" \
     --anneal_kld \
     --anneal_k        3.5e-5 \
-    --anneal_x0       200000 \
+    --anneal_x0       220000 \
     --au_threshold    0.01 \
     --project         "${PROJECT}" \
     --entity          "${ENTITY}" \
