@@ -17,6 +17,7 @@ param(
     [int]   $MaxValSamples = 500000,
     [int]   $LatentDim   = 128,
     [double]$Lr          = 1e-4,
+    [double]$KldWeight   = 0.005,
     [int]   $Epochs      = 50,
     [string]$Precision   = "16-mixed",
     [string]$Project     = "tiltedvae-myzus",
@@ -53,10 +54,10 @@ python "$ScriptDir\train.py" `
     --index_cache     "$IndexCache" `
     --latent_dim      $LatentDim `
     --lr              $Lr `
+    --kld_weight      $KldWeight `
     --epochs          $Epochs `
     --precision       $Precision `
     --anneal_kld `
-    --anneal_end      1.0 `
     --anneal_k        3.5e-5 `
     --anneal_x0       200000 `
     --au_threshold    0.01 `

@@ -16,12 +16,13 @@ set -euo pipefail
 # ---- Configuration (override via env vars) ----
 DATA_DIR="${DATA_DIR:-/home/sagemaker-user/DATA/}"
 IMG_SIZE="${IMG_SIZE:-96}"
-BATCH_SIZE="${BATCH_SIZE:-1024}"
+BATCH_SIZE="${BATCH_SIZE:-512}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 VAL_SPLIT="${VAL_SPLIT:-0.05}"
 MAX_VAL_SAMPLES="${MAX_VAL_SAMPLES:-500000}"
 LATENT_DIM="${LATENT_DIM:-128}"
 LR="${LR:-1e-3}"
+KLD_WEIGHT="${KLD_WEIGHT:-0.005}"
 EPOCHS="${EPOCHS:-100}"
 PRECISION="${PRECISION:-16-mixed}"
 PROJECT="${PROJECT:-tilted-vae-myzus}"
@@ -46,10 +47,10 @@ python "${SCRIPT_DIR}/train.py" \
     --index_cache     "${INDEX_CACHE}" \
     --latent_dim      "${LATENT_DIM}" \
     --lr              "${LR}" \
+    --kld_weight      "${KLD_WEIGHT}" \
     --epochs          "${EPOCHS}" \
     --precision       "${PRECISION}" \
     --anneal_kld \
-    --anneal_end      1.0 \
     --anneal_k        3.5e-5 \
     --anneal_x0       200000 \
     --au_threshold    0.01 \

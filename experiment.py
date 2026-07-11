@@ -28,8 +28,6 @@ class VAEExperiment(pl.LightningModule):
         anneal_k: steepness of the sigmoid annealing schedule.
         anneal_x0: global step at which the sigmoid schedule reaches its
             midpoint (half of the target KL weight).
-        anneal_end: final KL weight the sigmoid schedule saturates to when
-            annealing is enabled (e.g. 1.0).
         au_threshold: variance threshold on the aggregated posterior mean
             used to count active units (AU).
     """
@@ -44,7 +42,6 @@ class VAEExperiment(pl.LightningModule):
                  anneal_kld: bool = False,
                  anneal_k: float = 0.0025,
                  anneal_x0: int = 2500,
-                 anneal_end: float = 1.0,
                  au_threshold: float = 0.01) -> None:
         super().__init__()
         self.model = model
@@ -56,7 +53,6 @@ class VAEExperiment(pl.LightningModule):
         self.anneal_kld = anneal_kld
         self.anneal_k = anneal_k
         self.anneal_x0 = anneal_x0
-        self.anneal_end = anneal_end
         self.au_threshold = au_threshold
         # Running sufficient statistics for epoch-level latent metrics
         # (KL per dim, AU), aggregated across DDP ranks at epoch end.
@@ -76,7 +72,7 @@ class VAEExperiment(pl.LightningModule):
     def _kld_weight(self) -> float:
         """Current KL weight. When annealing is disabled, returns the fixed
         ``kld_weight``. When enabled, follows a sigmoid schedule that ramps
-        from ~0 up to ``anneal_end`` (e.g. 1.0).
+        from ~0 up to the target ``kld_weight``.
 
         Note: no world-size scaling is applied. The loss uses mean reductions
         and DDP averages gradients, so the recon:KL ratio (= kld_weight) is
@@ -85,7 +81,7 @@ class VAEExperiment(pl.LightningModule):
         if not self.anneal_kld:
             return self.kld_weight
         factor = 1.0 / (1.0 + math.exp(-self.anneal_k * (self.global_step - self.anneal_x0)))
-        return self.anneal_end * factor
+        return self.kld_weight * factor
 
     def _step(self, batch: Any, kld_weight: float):
         images, _ = batch
