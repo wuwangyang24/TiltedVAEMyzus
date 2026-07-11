@@ -9,23 +9,23 @@
 #   .\run_train.ps1 -DataDir "D:\images" -BatchSize 128 -Epochs 50
 
 param(
-    [string]$DataDir     = "C:\Users\gosnn\OneDrive - Bayer\Personal Data\TiltedVAEMyzus\data",
+    [string]$DataDir     = "../DATA/",
     [int]   $ImgSize     = 96,
-    [int]   $BatchSize   = 64,
+    [int]   $BatchSize   = 1024,
     [int]   $NumWorkers  = 8,
     [double]$ValSplit    = 0.05,
-    [int]   $MaxValSamples = 20000,
+    [int]   $MaxValSamples = 500000,
     [int]   $LatentDim   = 128,
     [double]$Lr          = 1e-3,
     [int]   $Epochs      = 100,
     [string]$Precision   = "16-mixed",
     [string]$Project     = "tilted-vae-myzus",
-    [string]$Entity      = "your-wandb-entity",
+    [string]$Entity      = "wangyang-wu-bayer",
     [string]$RunName     = "vae-run",
     [string]$OutputDir   = "results",
     # SECURITY: this key is hard-coded below. Do NOT commit this file to git
     # once you fill it in (add run_train.ps1 to .gitignore).
-    [string]$WandbApiKey = "PASTE_YOUR_WANDB_API_KEY_HERE"
+    [string]$WandbApiKey = "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"
 )
 
 $ErrorActionPreference = "Stop"
