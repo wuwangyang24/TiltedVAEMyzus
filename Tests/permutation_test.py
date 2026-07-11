@@ -3,7 +3,8 @@
 Idea: a biologically meaningful embedding of an aphid image should be (largely)
 invariant to the apparent size of the specimen in the frame. This script:
 
-  1. Randomly samples ``N`` images from the dataset.
+  1. Selects ``N`` images whose object size (non-black pixel count) is closest
+     to a target point, so the specimens are comparably sized.
   2. Builds three views of each image, all at the model's native ``img_size``:
        - original : the image resized to ``img_size`` (baseline the encoder sees)
        - enlarged : the image zoomed in by ``scale`` (~15%) and center-cropped
@@ -18,7 +19,7 @@ small), rather than separating by scale.
 Examples:
     python permutation_test.py --data_dir /path/to/images \
         --checkpoint results/checkpoints/last.ckpt --model tilted \
-        --n_samples 300 --method umap
+        --size_pool 300 --method umap
 """
 import argparse
 import os
@@ -59,27 +60,22 @@ def parse_args() -> argparse.Namespace:
                         help="Tilt parameter for TiltedVAE (only used with --model tilted)")
 
     # Test configuration
-    parser.add_argument("--n_samples", type=int, default=300,
-                        help="Number of images to randomly sample from the dataset")
     parser.add_argument("--scale", type=float, default=0.15,
                         help="Fractional zoom for the enlarge/shrink views (0.15 = 15%%)")
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
 
-    # Object-size filtering (images have a black background, so the object
+    # Object-size matching (images have a black background, so the object
     # "size" is approximated by the number of non-black foreground pixels).
-    parser.add_argument("--match_size", action="store_true",
-                        help="Only sample images whose object size (non-black "
-                             "pixel count) is very similar")
     parser.add_argument("--black_threshold", type=int, default=10,
                         help="A pixel counts as foreground if its max channel "
                              "value exceeds this (0-255)")
-    parser.add_argument("--size_pool", type=int, default=2000,
-                        help="Number of random candidate images to measure when "
-                             "--match_size is set (bounds the scanning cost)")
+    parser.add_argument("--size_pool", type=int, default=300,
+                        help="Number of images to select whose object size is "
+                             "closest to the target point")
     parser.add_argument("--size_percentile", type=float, default=50.0,
-                        help="Center of the object-size window to select, as a "
-                             "percentile of the measured pool (0-100)")
+                        help="Target object size to match, as a percentile of the "
+                             "dataset's measured foreground areas (0-100)")
 
     # Dimensionality reduction / output
     parser.add_argument("--method", type=str, default="pca",
@@ -144,43 +140,27 @@ def foreground_area(path: str, in_channels: int, black_threshold: int) -> int:
     return int((brightness > black_threshold).sum().item())
 
 
-def sample_paths(data_dir: str, n_samples: int, seed: int) -> List[str]:
-    paths = _scan_images(data_dir)
-    if not paths:
-        raise RuntimeError(f"No images found under '{data_dir}'.")
-    rng = np.random.default_rng(seed)
-    n = min(n_samples, len(paths))
-    idx = rng.choice(len(paths), size=n, replace=False)
-    return [paths[i] for i in idx]
-
-
-def sample_paths_by_size(data_dir: str, n_samples: int, seed: int,
-                         in_channels: int, black_threshold: int,
+def sample_paths_by_size(data_dir: str, in_channels: int, black_threshold: int,
                          size_pool: int, size_percentile: float) -> List[str]:
-    """Sample ``n_samples`` images whose object size (non-black pixel count) is
-    as similar as possible.
+    """Select the ``size_pool`` images whose object size (non-black pixel count)
+    is closest to a target point.
 
-    A random pool of up to ``size_pool`` images is measured, then the
-    ``n_samples`` images whose areas are closest to the target point (the
-    ``size_percentile`` of the measured pool) are returned.
+    Every image in the dataset is measured, the target area is taken as the
+    ``size_percentile`` of those areas, and the ``size_pool`` images with the
+    smallest absolute distance to that target are returned.
     """
     paths = _scan_images(data_dir)
     if not paths:
         raise RuntimeError(f"No images found under '{data_dir}'.")
 
-    rng = np.random.default_rng(seed)
-    pool_n = min(size_pool, len(paths))
-    pool_idx = rng.choice(len(paths), size=pool_n, replace=False)
-    pool_paths = [paths[i] for i in pool_idx]
-
-    print(f"[size] Measuring foreground area of {pool_n} candidate images...")
+    print(f"[size] Measuring foreground area of {len(paths)} images...")
     areas = np.array([
-        foreground_area(p, in_channels, black_threshold) for p in pool_paths
+        foreground_area(p, in_channels, black_threshold) for p in paths
     ])
 
-    # Pick the n images whose area is closest to the target point (the requested
-    # percentile of the measured pool).
-    n = min(n_samples, pool_n)
+    # Pick the images whose area is closest to the target point (the requested
+    # percentile of the measured areas).
+    n = min(size_pool, len(paths))
     target = np.percentile(areas, size_percentile)
     window = np.argsort(np.abs(areas - target))[:n]
 
@@ -189,7 +169,7 @@ def sample_paths_by_size(data_dir: str, n_samples: int, seed: int,
           f"area = {selected_areas.mean():.0f} +/- {selected_areas.std():.0f} px "
           f"(min {selected_areas.min()}, max {selected_areas.max()})")
 
-    return [pool_paths[i] for i in window]
+    return [paths[i] for i in window]
 
 
 def build_transforms(img_size: int, scale: float):
@@ -328,13 +308,10 @@ def main() -> None:
     load_checkpoint(model, args.checkpoint)
     model.eval().to(device)
 
-    # Sample images and build the three scaled views
-    if args.match_size:
-        paths = sample_paths_by_size(
-            args.data_dir, args.n_samples, args.seed, args.in_channels,
-            args.black_threshold, args.size_pool, args.size_percentile)
-    else:
-        paths = sample_paths(args.data_dir, args.n_samples, args.seed)
+    # Select size-matched images and build the three scaled views
+    paths = sample_paths_by_size(
+        args.data_dir, args.in_channels, args.black_threshold,
+        args.size_pool, args.size_percentile)
     n = len(paths)
     print(f"[data] Sampled {n} images from '{args.data_dir}'")
 
