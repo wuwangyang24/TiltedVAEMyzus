@@ -14,7 +14,7 @@
 set -euo pipefail
 
 # ---- Configuration (override via env vars) ----
-DATA_DIR="${DATA_DIR:-../DATA/}"
+DATA_DIR="${DATA_DIR:-/home/sagemaker-user/DATA/}"
 IMG_SIZE="${IMG_SIZE:-96}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
 NUM_WORKERS="${NUM_WORKERS:-8}"

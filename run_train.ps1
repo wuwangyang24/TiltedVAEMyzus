@@ -19,7 +19,7 @@ param(
     [double]$Lr          = 1e-3,
     [int]   $Epochs      = 100,
     [string]$Precision   = "16-mixed",
-    [string]$Project     = "tilted-vae-myzus",
+    [string]$Project     = "tiltedvae-myzus",
     [string]$Entity      = "wangyang-wu-bayer",
     [string]$RunName     = "vae-run",
     [string]$OutputDir   = "results",
