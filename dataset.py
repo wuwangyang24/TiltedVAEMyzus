@@ -62,6 +62,10 @@ class RecursiveImageDataset(Dataset):
         if index_cache and os.path.isfile(index_cache):
             paths = np.load(index_cache, allow_pickle=False)
         else:
+            paths = None
+
+        # Ignore an empty/stale cache and (re)scan the directory.
+        if paths is None or len(paths) == 0:
             if not os.path.isdir(root):
                 raise RuntimeError(
                     f"Data directory does not exist: {root!r} "
@@ -69,7 +73,8 @@ class RecursiveImageDataset(Dataset):
                     f"Pass an absolute --data_dir."
                 )
             paths = np.asarray(_scan_images(root))
-            if index_cache:
+            # Only cache a non-empty result so we never persist a bad scan.
+            if index_cache and len(paths) > 0:
                 os.makedirs(os.path.dirname(index_cache) or ".", exist_ok=True)
                 np.save(index_cache, paths)
 
