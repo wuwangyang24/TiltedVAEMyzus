@@ -1,25 +1,29 @@
-"""Select a group of images matched in BOTH object size and color, then run
-both permutation tests (scale and color) on that single shared group.
+"""Select a group of images matched in object size, color AND shape, then run
+all three permutation tests (scale, color and shape) on that single shared group.
 
-Idea: the scale- and color-permutation tests each pick their own images (one by
-foreground area, the other by foreground brightness). To compare the two tests
-on exactly the same specimens, this script selects one group of images that are
-simultaneously close to a target object *size* and a target object *color
-intensity*, then feeds that fixed group to both tests.
+Idea: the scale-, color- and shape-permutation tests each pick their own images
+(by foreground area, foreground brightness, and foreground aspect ratio
+respectively). To compare the three tests on exactly the same specimens, this
+script selects one group of images that are simultaneously close to a target
+object *size*, *color intensity* and *shape*, then feeds that fixed group to all
+three tests.
 
 Pipeline:
-  1. Scan every image and measure two properties:
+  1. Scan every image and measure three properties:
        - size  : number of non-black foreground pixels (area proxy)
        - color : mean brightness of the non-black foreground pixels
-  2. Standardize both measures (z-scores) and select the ``pool`` images whose
-     combined distance to the target (size percentile, color percentile) is
-     smallest -- i.e. images that are similar in *both* size and color.
+       - shape : length/width aspect ratio of the foreground bounding box
+  2. Standardize all measures (z-scores) and select the ``pool`` images whose
+     combined distance to the target (size, color, shape percentiles) is
+     smallest -- i.e. images that are similar in size, color *and* shape.
   3. Run the scale-permutation test on that group (original/enlarged/shrunk).
   4. Run the color-permutation test on that group (original/brighter/darker).
+  5. Run the shape-permutation test on that group
+     (original/stretched_length/stretched_width).
 
-Both tests reuse the exact functions from ``permutation_test_size.py`` and
-``permutation_test_color.py`` so their behaviour is unchanged; only the image
-group is shared.
+All tests reuse the exact functions from ``permutation_test_size.py``,
+``permutation_test_color.py`` and ``permutation_test_shape.py`` so their
+behaviour is unchanged; only the image group is shared.
 
 Examples:
     python Tests/select_test.py --data_dir ../DATA/Train/ --checkpoint results/checkpoints/last.ckpt --model vae --pool 500 --method pca --device cpu
@@ -56,6 +60,7 @@ def _load_test_module(filename: str, name: str) -> ModuleType:
 
 size_test = _load_test_module("permutation_test_size.py", "permutation_test_size")
 color_test = _load_test_module("permutation_test_color.py", "permutation_test_color")
+shape_test = _load_test_module("permutation_test_shape.py", "permutation_test_shape")
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,16 +83,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tau", type=float, default=None,
                         help="Tilt parameter for TiltedVAE (only used with --model tilted)")
 
-    # Group selection (matched in both size and color)
+    # Group selection (matched in size, color and shape)
     parser.add_argument("--pool", type=int, default=300,
-                        help="Number of images to select whose object size AND "
-                             "color intensity are both closest to the target")
+                        help="Number of images to select whose object size, "
+                             "color intensity AND shape are all closest to the target")
     parser.add_argument("--size_percentile", type=float, default=50.0,
                         help="Target object size to match, as a percentile of the "
                              "dataset's measured foreground areas (0-100)")
     parser.add_argument("--color_percentile", type=float, default=50.0,
                         help="Target color intensity to match, as a percentile of "
                              "the dataset's measured foreground brightnesses (0-100)")
+    parser.add_argument("--shape_percentile", type=float, default=50.0,
+                        help="Target object shape to match, as a percentile of the "
+                             "dataset's measured foreground aspect ratios (0-100)")
     parser.add_argument("--black_threshold", type=int, default=0,
                         help="A pixel counts as foreground if its max channel "
                              "value exceeds this (0-255)")
@@ -98,6 +106,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--color_scale", type=float, default=0.3,
                         help="Fractional color-intensity change for the "
                              "brighter/darker views")
+    parser.add_argument("--shape_scale", type=float, default=0.2,
+                        help="Fractional stretch for the length/width views")
 
     # Shared test configuration
     parser.add_argument("--batch_size", type=int, default=64)
@@ -112,21 +122,23 @@ def parse_args() -> argparse.Namespace:
                         help="Draw faint lines connecting the views of each image")
     parser.add_argument("--shared_projection", action="store_true",
                         help="Fit a single dimensionality reducer jointly on all "
-                             "five view groups (original/enlarged/shrunk/brighter/"
-                             "darker) so the 'original' points land at identical "
-                             "coordinates in both plots")
+                             "seven view groups (original/enlarged/shrunk/brighter/"
+                             "darker/stretched_length/stretched_width) so the "
+                             "'original' points land at identical coordinates in "
+                             "all plots")
 
     return parser.parse_args()
 
 
 def select_matched_paths(data_dir: str, in_channels: int, black_threshold: int,
                          pool: int, size_percentile: float,
-                         color_percentile: float, output_dir: str) -> List[str]:
+                         color_percentile: float, shape_percentile: float,
+                         output_dir: str) -> List[str]:
     """Select the ``pool`` images that are simultaneously closest to the target
-    object size and target color intensity.
+    object size, target color intensity and target shape.
 
-    Both properties are standardized (z-scored) so they contribute comparably,
-    and images are ranked by the Euclidean distance of their (size, color)
+    All properties are standardized (z-scored) so they contribute comparably,
+    and images are ranked by the Euclidean distance of their (size, color, shape)
     z-scores to the target point. The selected paths are also written to
     ``<output_dir>/selected_paths.txt`` for reference.
     """
@@ -134,7 +146,7 @@ def select_matched_paths(data_dir: str, in_channels: int, black_threshold: int,
     if not paths:
         raise RuntimeError(f"No images found under '{data_dir}'.")
 
-    print(f"[select] Measuring size and color of {len(paths)} images...")
+    print(f"[select] Measuring size, color and shape of {len(paths)} images...")
     areas = np.array([
         size_test.foreground_area(p, in_channels, black_threshold) for p in paths
     ], dtype=np.float64)
@@ -142,30 +154,41 @@ def select_matched_paths(data_dir: str, in_channels: int, black_threshold: int,
         color_test.foreground_intensity(p, in_channels, black_threshold)
         for p in paths
     ], dtype=np.float64)
+    ratios = np.array([
+        shape_test.foreground_aspect_ratio(p, in_channels, black_threshold)
+        for p in paths
+    ], dtype=np.float64)
 
-    # Standardize both measures so distances in each are comparable.
+    # Standardize all measures so distances in each are comparable.
     area_std = areas.std() or 1.0
     int_std = intensities.std() or 1.0
+    ratio_std = ratios.std() or 1.0
     area_z = (areas - areas.mean()) / area_std
     int_z = (intensities - intensities.mean()) / int_std
+    ratio_z = (ratios - ratios.mean()) / ratio_std
 
     # Target point: the requested percentile in each property, in z-space.
     area_target = (np.percentile(areas, size_percentile) - areas.mean()) / area_std
     int_target = (np.percentile(intensities, color_percentile) - intensities.mean()) / int_std
+    ratio_target = (np.percentile(ratios, shape_percentile) - ratios.mean()) / ratio_std
 
-    # Combined distance to the target in the (size, color) z-plane.
-    dist = np.sqrt((area_z - area_target) ** 2 + (int_z - int_target) ** 2)
+    # Combined distance to the target in the (size, color, shape) z-space.
+    dist = np.sqrt((area_z - area_target) ** 2 + (int_z - int_target) ** 2
+                   + (ratio_z - ratio_target) ** 2)
 
     n = min(pool, len(paths))
     window = np.argsort(dist)[:n]
 
     sel_area = areas[window]
     sel_int = intensities[window]
-    print(f"[select] Selected {n} size+color-matched images:")
+    sel_ratio = ratios[window]
+    print(f"[select] Selected {n} size+color+shape-matched images:")
     print(f"[select]   size  = {sel_area.mean():.0f} +/- {sel_area.std():.0f} px "
           f"(min {sel_area.min():.0f}, max {sel_area.max():.0f})")
     print(f"[select]   color = {sel_int.mean():.1f} +/- {sel_int.std():.1f} "
           f"(min {sel_int.min():.1f}, max {sel_int.max():.1f})")
+    print(f"[select]   shape = {sel_ratio.mean():.3f} +/- {sel_ratio.std():.3f} "
+          f"(min {sel_ratio.min():.3f}, max {sel_ratio.max():.3f})")
 
     selected = [paths[i] for i in window]
 
@@ -243,21 +266,25 @@ def main() -> None:
     size_test.load_checkpoint(model, args.checkpoint)
     model.eval().to(device)
 
-    # Select the shared, size- and color-matched image group.
+    # Select the shared, size-, color- and shape-matched image group.
     paths = select_matched_paths(
         args.data_dir, args.in_channels, args.black_threshold, args.pool,
-        args.size_percentile, args.color_percentile, args.output_dir)
+        args.size_percentile, args.color_percentile, args.shape_percentile,
+        args.output_dir)
     n = len(paths)
 
     size_names = ["original", "enlarged", "shrunk"]
     color_names = ["original", "brighter", "darker"]
+    shape_names = ["original", "stretched_length", "stretched_width"]
     size_dir = os.path.join(args.output_dir, "size")
     color_dir = os.path.join(args.output_dir, "color")
+    shape_dir = os.path.join(args.output_dir, "shape")
     size_transforms = size_test.build_transforms(args.img_size, args.size_scale)
     color_transforms = color_test.build_transforms(args.color_scale)
+    shape_transforms = shape_test.build_transforms(args.img_size, args.shape_scale)
 
     if args.shared_projection:
-        # Encode both tests, then fit ONE reducer jointly across all five view
+        # Encode all tests, then fit ONE reducer jointly across all seven view
         # groups so the identical 'original' latents map to identical 2D points.
         size_groups = encode_groups(
             size_test, model, paths, size_names, size_transforms,
@@ -265,26 +292,33 @@ def main() -> None:
         color_groups = encode_groups(
             color_test, model, paths, color_names, color_transforms,
             args, device, "color", color_dir)
+        shape_groups = encode_groups(
+            shape_test, model, paths, shape_names, shape_transforms,
+            args, device, "shape", shape_dir)
 
-        # 'original' is identical in both tests (same images, identity view).
+        # 'original' is identical in all tests (same images, identity view).
         original = size_groups["original"]
         combined = np.concatenate([
             original,
             size_groups["enlarged"], size_groups["shrunk"],
             color_groups["brighter"], color_groups["darker"],
+            shape_groups["stretched_length"], shape_groups["stretched_width"],
         ], axis=0)
 
-        print("\n[shared] Fitting one joint projection across all five view groups")
+        print("\n[shared] Fitting one joint projection across all seven view groups")
         coords_all = size_test.reduce_dims(combined, args.method, args.seed)
         o = coords_all[0:n]
         en, sh = coords_all[n:2 * n], coords_all[2 * n:3 * n]
         br, da = coords_all[3 * n:4 * n], coords_all[4 * n:5 * n]
+        sl, sw = coords_all[5 * n:6 * n], coords_all[6 * n:7 * n]
 
         # Reassemble per-test coords group-by-group; 'original' slice is shared.
         plot_groups(size_test, np.concatenate([o, en, sh], axis=0),
                     size_names, n, args, size_dir)
         plot_groups(color_test, np.concatenate([o, br, da], axis=0),
                     color_names, n, args, color_dir)
+        plot_groups(shape_test, np.concatenate([o, sl, sw], axis=0),
+                    shape_names, n, args, shape_dir)
     else:
         # Each test fits its own projection (original points differ per plot).
         run_permutation_test(
@@ -293,8 +327,11 @@ def main() -> None:
         run_permutation_test(
             color_test, model, paths, color_names, color_transforms,
             args, device, "color", color_dir)
+        run_permutation_test(
+            shape_test, model, paths, shape_names, shape_transforms,
+            args, device, "shape", shape_dir)
 
-    print("\n[done] Both permutation tests completed on the shared image group.")
+    print("\n[done] All permutation tests completed on the shared image group.")
 
 
 if __name__ == "__main__":
