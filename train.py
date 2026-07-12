@@ -161,7 +161,9 @@ def main() -> None:
     wandb_logger.log_hyperparams(vars(args))
 
     # Callbacks
-    ckpt_dir = os.path.join(args.output_dir, "checkpoints")
+    ckpt_dir = os.path.join(
+        args.output_dir, "checkpoints", f"{args.model}-latent{args.latent_dim}"
+    )
     checkpoint_callback = ModelCheckpoint(
         dirpath=ckpt_dir,
         filename=args.model + "-{epoch:02d}-{val_loss:.2f}",
