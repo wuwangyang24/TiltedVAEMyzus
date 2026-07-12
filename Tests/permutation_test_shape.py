@@ -60,7 +60,7 @@ def parse_args() -> argparse.Namespace:
                         help="Tilt parameter for TiltedVAE (only used with --model tilted)")
 
     # Test configuration
-    parser.add_argument("--scale", type=float, default=0.15,
+    parser.add_argument("--scale", type=float, default=0.2,
                         help="Fractional stretch for the length/width views "
                              "(0.15 = 15%%)")
     parser.add_argument("--batch_size", type=int, default=64)

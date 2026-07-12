@@ -21,10 +21,10 @@ NUM_WORKERS="${NUM_WORKERS:-8}"
 VAL_SPLIT="${VAL_SPLIT:-0.05}"
 MAX_VAL_SAMPLES="${MAX_VAL_SAMPLES:-500000}"
 MODEL="${MODEL:-tilted}"
-LATENT_DIM="${LATENT_DIM:-128}"
+LATENT_DIM="${LATENT_DIM:-384}"
 TAU="${TAU:-}"
 LR="${LR:-1e-3}"
-KLD_WEIGHT="${KLD_WEIGHT:-0.005}"
+KLD_WEIGHT="${KLD_WEIGHT:-1}"
 EPOCHS="${EPOCHS:-50}"
 PRECISION="${PRECISION:-16-mixed}"
 PROJECT="${PROJECT:-tilted-vae-myzus}"
@@ -66,8 +66,8 @@ python "${SCRIPT_DIR}/train.py" \
     --epochs          "${EPOCHS}" \
     --precision       "${PRECISION}" \
     --anneal_kld \
-    --anneal_k        3.5e-5 \
-    --anneal_x0       220000 \
+    --anneal_k        6e-5 \
+    --anneal_x0       355000 \
     --au_threshold    0.01 \
     --project         "${PROJECT}" \
     --entity          "${ENTITY}" \
