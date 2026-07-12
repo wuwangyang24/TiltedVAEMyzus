@@ -110,6 +110,11 @@ def parse_args() -> argparse.Namespace:
                         help="Torch device (default: cuda if available else cpu)")
     parser.add_argument("--draw_links", action="store_true",
                         help="Draw faint lines connecting the views of each image")
+    parser.add_argument("--shared_projection", action="store_true",
+                        help="Fit a single dimensionality reducer jointly on all "
+                             "five view groups (original/enlarged/shrunk/brighter/"
+                             "darker) so the 'original' points land at identical "
+                             "coordinates in both plots")
 
     return parser.parse_args()
 
@@ -173,12 +178,12 @@ def select_matched_paths(data_dir: str, in_channels: int, black_threshold: int,
     return selected
 
 
-def run_permutation_test(test_module: ModuleType, model: torch.nn.Module,
-                         paths: List[str], group_names: List[str], transforms: dict,
-                         args: argparse.Namespace, device: torch.device,
-                         label: str, output_dir: str) -> None:
-    """Run one permutation test (scale or color) on a fixed image group, reusing
-    the encoding / reduction / plotting helpers from that test's module."""
+def encode_groups(test_module: ModuleType, model: torch.nn.Module,
+                  paths: List[str], group_names: List[str], transforms: dict,
+                  args: argparse.Namespace, device: torch.device,
+                  label: str, output_dir: str) -> dict:
+    """Encode every view of the image group to latents, print the invariance
+    summary, and save the raw latents. Returns the per-view latent dict."""
     print(f"\n[{label}] Running {label}-permutation test on {len(paths)} images")
     os.makedirs(output_dir, exist_ok=True)
 
@@ -196,12 +201,30 @@ def run_permutation_test(test_module: ModuleType, model: torch.nn.Module,
     np.savez(npz_path, **groups, paths=np.array(paths))
     print(f"[{label}] Saved latents to {npz_path}")
 
-    all_latents = np.concatenate([groups[name] for name in group_names], axis=0)
-    coords = test_module.reduce_dims(all_latents, args.method, args.seed)
+    return groups
 
+
+def plot_groups(test_module: ModuleType, coords: np.ndarray,
+                group_names: List[str], n: int, args: argparse.Namespace,
+                output_dir: str) -> None:
+    """Plot the 2D projection of a test's groups (coords laid out group-by-group,
+    each group occupying ``n`` contiguous rows)."""
     out_path = os.path.join(output_dir, f"permutation_{args.method}.png")
     test_module.plot_projection(
-        coords, group_names, len(paths), args.method, args.draw_links, out_path)
+        coords, group_names, n, args.method, args.draw_links, out_path)
+
+
+def run_permutation_test(test_module: ModuleType, model: torch.nn.Module,
+                         paths: List[str], group_names: List[str], transforms: dict,
+                         args: argparse.Namespace, device: torch.device,
+                         label: str, output_dir: str) -> None:
+    """Run one permutation test (scale or color) on a fixed image group with its
+    own independently-fit projection."""
+    groups = encode_groups(test_module, model, paths, group_names, transforms,
+                           args, device, label, output_dir)
+    all_latents = np.concatenate([groups[name] for name in group_names], axis=0)
+    coords = test_module.reduce_dims(all_latents, args.method, args.seed)
+    plot_groups(test_module, coords, group_names, len(paths), args, output_dir)
 
 
 def main() -> None:
@@ -224,20 +247,52 @@ def main() -> None:
     paths = select_matched_paths(
         args.data_dir, args.in_channels, args.black_threshold, args.pool,
         args.size_percentile, args.color_percentile, args.output_dir)
+    n = len(paths)
 
-    # Scale-permutation test on the shared group.
+    size_names = ["original", "enlarged", "shrunk"]
+    color_names = ["original", "brighter", "darker"]
+    size_dir = os.path.join(args.output_dir, "size")
+    color_dir = os.path.join(args.output_dir, "color")
     size_transforms = size_test.build_transforms(args.img_size, args.size_scale)
-    run_permutation_test(
-        size_test, model, paths,
-        ["original", "enlarged", "shrunk"], size_transforms,
-        args, device, "size", os.path.join(args.output_dir, "size"))
-
-    # Color-permutation test on the shared group.
     color_transforms = color_test.build_transforms(args.color_scale)
-    run_permutation_test(
-        color_test, model, paths,
-        ["original", "brighter", "darker"], color_transforms,
-        args, device, "color", os.path.join(args.output_dir, "color"))
+
+    if args.shared_projection:
+        # Encode both tests, then fit ONE reducer jointly across all five view
+        # groups so the identical 'original' latents map to identical 2D points.
+        size_groups = encode_groups(
+            size_test, model, paths, size_names, size_transforms,
+            args, device, "size", size_dir)
+        color_groups = encode_groups(
+            color_test, model, paths, color_names, color_transforms,
+            args, device, "color", color_dir)
+
+        # 'original' is identical in both tests (same images, identity view).
+        original = size_groups["original"]
+        combined = np.concatenate([
+            original,
+            size_groups["enlarged"], size_groups["shrunk"],
+            color_groups["brighter"], color_groups["darker"],
+        ], axis=0)
+
+        print("\n[shared] Fitting one joint projection across all five view groups")
+        coords_all = size_test.reduce_dims(combined, args.method, args.seed)
+        o = coords_all[0:n]
+        en, sh = coords_all[n:2 * n], coords_all[2 * n:3 * n]
+        br, da = coords_all[3 * n:4 * n], coords_all[4 * n:5 * n]
+
+        # Reassemble per-test coords group-by-group; 'original' slice is shared.
+        plot_groups(size_test, np.concatenate([o, en, sh], axis=0),
+                    size_names, n, args, size_dir)
+        plot_groups(color_test, np.concatenate([o, br, da], axis=0),
+                    color_names, n, args, color_dir)
+    else:
+        # Each test fits its own projection (original points differ per plot).
+        run_permutation_test(
+            size_test, model, paths, size_names, size_transforms,
+            args, device, "size", size_dir)
+        run_permutation_test(
+            color_test, model, paths, color_names, color_transforms,
+            args, device, "color", color_dir)
 
     print("\n[done] Both permutation tests completed on the shared image group.")
 
