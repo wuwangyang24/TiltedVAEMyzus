@@ -19,9 +19,7 @@ close together (the clouds should overlap and the paired distances should be
 small), rather than separating by color intensity.
 
 Examples:
-    python permutation_test_color.py --data_dir /path/to/images \
-        --checkpoint results/checkpoints/last.ckpt --model tilted \
-        --intensity_pool 300 --method umap
+    python Tests/permutation_test_color.py --data_dir ../DATA/Train/ --checkpoint results/checkpoints/last.ckpt --model tilted --intensity_pool 1000 --method pca --scale 0.3 --device cpu
 """
 import argparse
 import os
@@ -70,7 +68,7 @@ def parse_args() -> argparse.Namespace:
 
     # Object-color matching (images have a black background, so the object
     # "color intensity" is the mean brightness of the non-black foreground pixels).
-    parser.add_argument("--black_threshold", type=int, default=10,
+    parser.add_argument("--black_threshold", type=int, default=0,
                         help="A pixel counts as foreground if its max channel "
                              "value exceeds this (0-255)")
     parser.add_argument("--intensity_pool", type=int, default=300,
