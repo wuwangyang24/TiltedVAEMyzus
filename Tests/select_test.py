@@ -22,7 +22,7 @@ Both tests reuse the exact functions from ``permutation_test_size.py`` and
 group is shared.
 
 Examples:
-    python Tests/select_test.py --data_dir ../DATA/Train/ --checkpoint results/checkpoints/last.ckpt --model tilted --pool 500 --method pca --device cpu
+    python Tests/select_test.py --data_dir ../DATA/Train/ --checkpoint results/checkpoints/last.ckpt --model vae --pool 500 --method pca --device cpu
 """
 import argparse
 import importlib.util
@@ -93,9 +93,9 @@ def parse_args() -> argparse.Namespace:
                              "value exceeds this (0-255)")
 
     # Per-test view strength
-    parser.add_argument("--size_scale", type=float, default=0.15,
+    parser.add_argument("--size_scale", type=float, default=0.2,
                         help="Fractional zoom for the enlarge/shrink views")
-    parser.add_argument("--color_scale", type=float, default=0.15,
+    parser.add_argument("--color_scale", type=float, default=0.3,
                         help="Fractional color-intensity change for the "
                              "brighter/darker views")
 
