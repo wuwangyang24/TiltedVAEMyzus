@@ -67,7 +67,7 @@ python "${SCRIPT_DIR}/train.py" \
     --precision       "${PRECISION}" \
     --anneal_kld \
     --anneal_k        6e-5 \
-    --anneal_x0       355000 \
+    --anneal_x0       310625 \
     --au_threshold    0.01 \
     --project         "${PROJECT}" \
     --entity          "${ENTITY}" \
