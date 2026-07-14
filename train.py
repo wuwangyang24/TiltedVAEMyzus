@@ -99,8 +99,8 @@ def parse_args() -> argparse.Namespace:
                         help="Subtract per-plate control embedding before classification")
     parser.add_argument("--cls_filter_by_efficacy", type=float, default=None,
                         help="Keep only compounds with Efficacy >= this value")
-    parser.add_argument("--cls_min_compounds_per_class", type=int, default=2,
-                        help="Drop classes with fewer compounds. Default: 2")
+    parser.add_argument("--cls_min_compounds_per_class", type=int, default=30,
+                        help="Drop classes with fewer compounds. Default: 30")
     parser.add_argument("--cls_cb_iterations", type=int, default=300,
                         help="CatBoost iterations for the callback classifier. Default: 300")
 
