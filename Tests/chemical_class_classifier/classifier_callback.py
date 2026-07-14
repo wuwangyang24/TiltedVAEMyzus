@@ -201,6 +201,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
         # Pre-load static data once
         self._metadata: Optional[List[Dict]] = None
         self._df: Optional[pd.DataFrame] = None
+        self._best_balanced_acc: float = 0.0
 
     def _load_data(self) -> None:
         """Load image metadata and label dataframe once."""
@@ -380,3 +381,16 @@ class ChemicalClassClassifierCallback(pl.Callback):
             f"  | confusion matrix -> {cm_path}\n",
             flush=True,
         )
+
+        # ── Save best checkpoint by balanced accuracy ────────────────────────
+        if balanced_acc > self._best_balanced_acc:
+            self._best_balanced_acc = balanced_acc
+            ckpt_dir = self.output_dir / "checkpoints"
+            ckpt_dir.mkdir(parents=True, exist_ok=True)
+            ckpt_path = ckpt_dir / "best_balanced_acc.ckpt"
+            trainer.save_checkpoint(str(ckpt_path))
+            print(
+                f"  [ClassifierCallback] New best balanced_acc={balanced_acc:.3f} "
+                f"— saved checkpoint to {ckpt_path}\n",
+                flush=True,
+            )
