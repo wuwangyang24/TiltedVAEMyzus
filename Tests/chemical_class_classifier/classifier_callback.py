@@ -231,7 +231,8 @@ class ChemicalClassClassifierCallback(pl.Callback):
         if self._df is None or self._df.empty:
             return None
         min_cpc = max(self.min_compounds_per_class, 2)
-        class_counts = self._df[self.label_col].value_counts()
+        # Count unique compounds per class (not rows, which may have duplicates)
+        class_counts = self._df.groupby(self.label_col)[self.compound_col].nunique()
         valid_classes = set(class_counts[class_counts >= min_cpc].index)
         if not valid_classes:
             return None
