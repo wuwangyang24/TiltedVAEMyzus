@@ -343,7 +343,11 @@ class ChemicalClassClassifierCallback(pl.Callback):
                 metrics[f"cls_test/top{k}_accuracy"] = topk
 
         # ── Log metrics ──────────────────────────────────────────────────────
-        pl_module.log_dict(metrics, prog_bar=False, logger=True)
+        # Use trainer.logger.log_metrics directly — pl_module.log_dict() from
+        # a callback's on_validation_epoch_end is unreliable in Lightning 2.x
+        # because the logging context is not propagated to callbacks.
+        if trainer.logger is not None:
+            trainer.logger.log_metrics(metrics, step=trainer.global_step)
 
         # ── Save confusion matrix ────────────────────────────────────────────
         from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
@@ -363,12 +367,14 @@ class ChemicalClassClassifierCallback(pl.Callback):
         # Log to W&B
         try:
             import wandb
-            if hasattr(trainer, "logger") and hasattr(trainer.logger, "experiment"):
-                trainer.logger.experiment.log({
-                    "cls_test/confusion_matrix": wandb.Image(fig),
-                    "global_step": trainer.global_step,
-                })
-        except ImportError:
+            if trainer.logger is not None and hasattr(trainer.logger, "experiment"):
+                experiment = trainer.logger.experiment
+                if experiment is not None:
+                    experiment.log({
+                        "cls_test/confusion_matrix": wandb.Image(fig),
+                        "trainer/global_step": trainer.global_step,
+                    })
+        except (ImportError, AttributeError):
             pass
 
         plt.close(fig)
