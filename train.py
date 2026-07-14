@@ -232,6 +232,7 @@ def main() -> None:
         callbacks=callbacks,
         log_every_n_steps=10,
         deterministic=args.deterministic,
+        num_sanity_val_steps=-1,  # Run full validation before training starts
     )
 
     trainer.fit(experiment, datamodule=datamodule)
