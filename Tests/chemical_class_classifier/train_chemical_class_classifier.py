@@ -109,6 +109,9 @@ def parse_args() -> argparse.Namespace:
                    help="Name of the compound ID column in metadata. Default: compound")
     p.add_argument("--label_col", default="chemical_class",
                    help="Name of the chemical class column in metadata. Default: chemical_class")
+    p.add_argument("--filter_by_efficacy", type=float, default=None,
+                   help="Keep only compounds whose 'Efficacy' column in metadata is >= this value. "
+                        "Requires an 'Efficacy' column in the metadata file.")
     p.add_argument("--subtract_control", action="store_true",
                    help="Subtract per-plate averaged control embedding from treated embeddings")
     p.add_argument("--normalize_before_subtract", action="store_true",
@@ -352,6 +355,16 @@ def main() -> None:
             f"Metadata is missing column(s): {missing}. "
             f"Available columns: {list(df.columns)}"
         )
+
+    if args.filter_by_efficacy is not None:
+        if "Efficacy" not in df.columns:
+            raise ValueError(
+                "--filter_by_efficacy requires an 'Efficacy' column in the metadata file. "
+                f"Available columns: {list(df.columns)}"
+            )
+        before = len(df)
+        df = df[df["Efficacy"] >= args.filter_by_efficacy]
+        print(f"  Filtered by Efficacy >= {args.filter_by_efficacy}: {before} -> {len(df)} rows.")
 
     df = df[[args.compound_col, args.label_col]].dropna()
     print(f"  {len(df)} compound rows after dropping NaN.")
