@@ -38,12 +38,7 @@ Output .pt file structure (dict):
     }
 
 Usage:
-    python Tests/chemical_class_classifier/encode_embeddings.py \
-        --metadata   data/compound_images.json \
-        --root_dir   ../DATA/Train/ \
-        --output     Tests/chemical_class_classifier/embeddings.pt \
-        --checkpoint results/checkpoints/last.ckpt \
-        --model      tilted --latent_dim 128 --img_size 96 --device cpu
+    python Tests/chemical_class_classifier/encode_embeddings.py --metadata ../METADATA/metadata_compound_all100ppm.json --root_dir ../DATA_TEST/ --output Tests/chemical_class_classifier/embeddings.pt --checkpoint results/checkpoints/tilted-latent32/last.ckpt --model tilted --latent_dim 32 --img_size 96 --device cpu
 """
 
 import argparse
