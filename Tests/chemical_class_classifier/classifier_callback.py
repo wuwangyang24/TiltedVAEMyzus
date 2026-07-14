@@ -222,6 +222,36 @@ class ChemicalClassClassifierCallback(pl.Callback):
 
         self._df = self._df[[self.compound_col, self.label_col]].dropna()
 
+    def _get_valid_compound_ids(self) -> Optional[set]:
+        """Return the set of compound IDs belonging to classes with enough members.
+
+        If min_compounds_per_class <= 1, returns None (no pre-filtering).
+        """
+        if self._df is None or self._df.empty:
+            return None
+        min_cpc = max(self.min_compounds_per_class, 2)
+        class_counts = self._df[self.label_col].value_counts()
+        valid_classes = set(class_counts[class_counts >= min_cpc].index)
+        if not valid_classes:
+            return None
+        valid_df = self._df[self._df[self.label_col].isin(valid_classes)]
+        return set(valid_df[self.compound_col].astype(str).unique())
+
+    def _filter_metadata(self, metadata: List[Dict]) -> List[Dict]:
+        """Filter metadata to only include compounds from valid classes."""
+        valid_ids = self._get_valid_compound_ids()
+        if valid_ids is None:
+            return metadata
+        filtered = [e for e in metadata if str(e["Compound"]) in valid_ids]
+        n_removed = len(metadata) - len(filtered)
+        if n_removed > 0:
+            print(
+                f"  [ClassifierCallback] Pre-filtered metadata: kept {len(filtered)}/{len(metadata)} "
+                f"compounds (removed {n_removed} from rare classes with <{self.min_compounds_per_class} members)",
+                flush=True,
+            )
+        return filtered
+
     def _run_logging_smoke_test(
         self, trainer: pl.Trainer, pl_module: pl.LightningModule
     ) -> None:
@@ -230,9 +260,10 @@ class ChemicalClassClassifierCallback(pl.Callback):
         if self._metadata is None or self._df is None or self._df.empty:
             return
 
-        # Use only 10% of metadata entries for speed
-        subset_size = max(1, len(self._metadata) // 10)
-        metadata_subset = self._metadata[:subset_size]
+        # Pre-filter to only compounds in valid classes, then take 10% for speed
+        filtered_metadata = self._filter_metadata(self._metadata)
+        subset_size = max(1, len(filtered_metadata) // 10)
+        metadata_subset = filtered_metadata[:subset_size]
 
         model = pl_module.model
         model.eval()
@@ -352,13 +383,17 @@ class ChemicalClassClassifierCallback(pl.Callback):
         if self._metadata is None or self._df is None or self._df.empty:
             return
 
-        # ── Encode all compounds with current model ──────────────────────────
+        # ── Encode only compounds from valid classes ─────────────────────────
         model = pl_module.model
         model.eval()
         device = pl_module.device
 
+        filtered_metadata = self._filter_metadata(self._metadata)
+        if not filtered_metadata:
+            return
+
         embeddings = _encode_all_compounds(
-            metadata=self._metadata,
+            metadata=filtered_metadata,
             root_dir=self.root_dir,
             model=model,
             img_size=self.img_size,
