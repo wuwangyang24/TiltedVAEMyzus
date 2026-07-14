@@ -16,6 +16,9 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
@@ -173,6 +176,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
         cb_iterations: int = 300,
         cb_depth: int = 5,
         seed: int = 42,
+        output_dir: str = "results",
     ):
         super().__init__()
         self.image_metadata_json = Path(image_metadata_json)
@@ -192,6 +196,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
         self.cb_iterations = cb_iterations
         self.cb_depth = cb_depth
         self.seed = seed
+        self.output_dir = Path(output_dir)
 
         # Pre-load static data once
         self._metadata: Optional[List[Dict]] = None
@@ -339,10 +344,39 @@ class ChemicalClassClassifierCallback(pl.Callback):
         # ── Log metrics ──────────────────────────────────────────────────────
         pl_module.log_dict(metrics, prog_bar=False, logger=True)
 
+        # ── Save confusion matrix ────────────────────────────────────────────
+        from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
+        cm = confusion_matrix(y_test, preds, labels=np.arange(num_classes))
+        fig, ax = plt.subplots(figsize=(max(8, num_classes * 0.5), max(8, num_classes * 0.5)))
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=classes)
+        disp.plot(ax=ax, cmap="Blues", colorbar=True, xticks_rotation=90)
+        ax.set_title(f"Confusion Matrix — Epoch {current_epoch}")
+        fig.tight_layout()
+
+        cm_dir = self.output_dir / "confusion_matrices"
+        cm_dir.mkdir(parents=True, exist_ok=True)
+        cm_path = cm_dir / f"confusion_matrix_epoch{current_epoch:04d}.png"
+        fig.savefig(cm_path, dpi=150)
+
+        # Log to W&B
+        try:
+            import wandb
+            if hasattr(trainer, "logger") and hasattr(trainer.logger, "experiment"):
+                trainer.logger.experiment.log({
+                    "cls_test/confusion_matrix": wandb.Image(fig),
+                    "global_step": trainer.global_step,
+                })
+        except ImportError:
+            pass
+
+        plt.close(fig)
+
         print(
             f"\n  [ClassifierCallback] Epoch {current_epoch}: "
             f"top1_acc={top1_acc:.3f}  balanced_acc={balanced_acc:.3f}  "
             f"weighted_f1={weighted_f1:.3f}  "
-            f"({num_classes} classes, {X.shape[0]} compounds)\n",
+            f"({num_classes} classes, {X.shape[0]} compounds)"
+            f"  | confusion matrix -> {cm_path}\n",
             flush=True,
         )

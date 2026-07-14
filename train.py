@@ -218,6 +218,7 @@ def main() -> None:
             batch_size=args.batch_size,
             cb_iterations=args.cls_cb_iterations,
             seed=args.seed,
+            output_dir=args.output_dir,
         )
         callbacks.append(cls_callback)
         print(f"[ClassifierCallback] Enabled — evaluating every {args.cls_every_n_epochs} epochs")
