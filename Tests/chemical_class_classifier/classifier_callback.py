@@ -334,9 +334,11 @@ class ChemicalClassClassifierCallback(pl.Callback):
         }
 
         # Attempt to log — this validates that the logging pipeline works
-        if trainer.logger is not None:
+        if trainer.logger is not None and hasattr(trainer.logger, "experiment"):
             try:
-                trainer.logger.log_metrics(smoke_metrics, step=trainer.global_step)
+                experiment = trainer.logger.experiment
+                if experiment is not None:
+                    experiment.log(smoke_metrics, commit=True)
                 self._logging_verified = True
                 print(
                     f"  [ClassifierCallback] Smoke test PASSED — logging works. "
@@ -481,13 +483,6 @@ class ChemicalClassClassifierCallback(pl.Callback):
                 topk = topk_acc(y_test, probs, k=k, labels=np.arange(num_classes))
                 metrics[f"cls_test/top{k}_accuracy"] = topk
 
-        # ── Log metrics ──────────────────────────────────────────────────────
-        # Use trainer.logger.log_metrics directly — pl_module.log_dict() from
-        # a callback's on_validation_epoch_end is unreliable in Lightning 2.x
-        # because the logging context is not propagated to callbacks.
-        if trainer.logger is not None:
-            trainer.logger.log_metrics(metrics, step=trainer.global_step)
-
         # ── Save confusion matrix ────────────────────────────────────────────
         from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
@@ -503,18 +498,20 @@ class ChemicalClassClassifierCallback(pl.Callback):
         cm_path = cm_dir / f"confusion_matrix_epoch{current_epoch:04d}.png"
         fig.savefig(cm_path, dpi=150)
 
-        # Log to W&B
+        # ── Log metrics + confusion matrix to W&B ────────────────────────────
+        # Use wandb.log() directly — trainer.logger.log_metrics() buffers
+        # internally and may never flush when called from a callback in
+        # Lightning 2.x.
         try:
             import wandb
             if trainer.logger is not None and hasattr(trainer.logger, "experiment"):
                 experiment = trainer.logger.experiment
                 if experiment is not None:
-                    experiment.log({
-                        "cls_test/confusion_matrix": wandb.Image(fig),
-                        "trainer/global_step": trainer.global_step,
-                    })
-        except (ImportError, AttributeError):
-            pass
+                    log_payload = dict(metrics)
+                    log_payload["cls_test/confusion_matrix"] = wandb.Image(fig)
+                    experiment.log(log_payload, commit=True)
+        except (ImportError, AttributeError) as e:
+            print(f"  [ClassifierCallback] W&B logging failed: {e}", flush=True)
 
         plt.close(fig)
 
