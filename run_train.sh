@@ -44,6 +44,14 @@ export WANDB_MODE="${WANDB_MODE:-offline}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INDEX_CACHE="${SCRIPT_DIR}/cache/image_index.npy"
 
+# ---- Chemical-class classifier callback ----
+CLS_IMAGE_METADATA="${CLS_IMAGE_METADATA:-/home/sagemaker-user/METADATA/metadata_compound_all100ppm.json}"
+CLS_LABEL_METADATA="${CLS_LABEL_METADATA:-/home/sagemaker-user/METADATA/synthesisprogram_compoundno.csv}"
+CLS_ROOT_DIR="${CLS_ROOT_DIR:-/home/sagemaker-user/DATA_TEST/}"
+CLS_EVERY_N_EPOCHS="${CLS_EVERY_N_EPOCHS:-5}"
+CLS_LABEL_COL="${CLS_LABEL_COL:-synthesis_program}"
+CLS_COMPOUND_COL="${CLS_COMPOUND_COL:-compound}"
+
 # Pass --tau only when it is set (TiltedVAE defaults to sqrt(2 * latent_dim)).
 TAU_ARG=()
 if [[ -n "${TAU}" ]]; then
@@ -72,4 +80,10 @@ python "${SCRIPT_DIR}/train.py" \
     --project         "${PROJECT}" \
     --entity          "${ENTITY}" \
     --run_name        "${RUN_NAME}" \
-    --output_dir      "${OUTPUT_DIR}"
+    --output_dir      "${OUTPUT_DIR}" \
+    --cls_image_metadata  "${CLS_IMAGE_METADATA}" \
+    --cls_label_metadata  "${CLS_LABEL_METADATA}" \
+    --cls_root_dir        "${CLS_ROOT_DIR}" \
+    --cls_every_n_epochs  "${CLS_EVERY_N_EPOCHS}" \
+    --cls_label_col       "${CLS_LABEL_COL}" \
+    --cls_compound_col    "${CLS_COMPOUND_COL}"
