@@ -336,5 +336,6 @@ class ChemicalClassClassifierCallback(pl.Callback):
             f"\n  [ClassifierCallback] Epoch {current_epoch}: "
             f"top1_acc={top1_acc:.3f}  balanced_acc={balanced_acc:.3f}  "
             f"weighted_f1={weighted_f1:.3f}  "
-            f"({num_classes} classes, {X.shape[0]} compounds)\n"
+            f"({num_classes} classes, {X.shape[0]} compounds)\n",
+            flush=True,
         )
