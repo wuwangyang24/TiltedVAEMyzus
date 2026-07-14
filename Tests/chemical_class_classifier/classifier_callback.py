@@ -219,12 +219,19 @@ class ChemicalClassClassifierCallback(pl.Callback):
     def on_validation_epoch_end(
         self, trainer: pl.Trainer, pl_module: pl.LightningModule
     ) -> None:
+        current_epoch = trainer.current_epoch
+        print(
+            f"  [ClassifierCallback] on_validation_epoch_end called "
+            f"(epoch={current_epoch}, is_global_zero={trainer.is_global_zero}, "
+            f"has_catboost={_HAS_CATBOOST})",
+            flush=True,
+        )
+
         # Only run on the main process
         if not trainer.is_global_zero:
             return
 
         # Only run every N epochs (epoch 0 is skipped to avoid noise)
-        current_epoch = trainer.current_epoch
         if current_epoch == 0:
             return
         if current_epoch % self.eval_every_n_epochs != 0:
