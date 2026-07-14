@@ -202,6 +202,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
         self._metadata: Optional[List[Dict]] = None
         self._df: Optional[pd.DataFrame] = None
         self._best_balanced_acc: float = 0.0
+        self._logging_verified: bool = False
 
     def _load_data(self) -> None:
         """Load image metadata and label dataframe once."""
@@ -222,6 +223,104 @@ class ChemicalClassClassifierCallback(pl.Callback):
 
         self._df = self._df[[self.compound_col, self.label_col]].dropna()
 
+    def _run_logging_smoke_test(
+        self, trainer: pl.Trainer, pl_module: pl.LightningModule
+    ) -> None:
+        """Run a quick classifier on 10% of data at epoch 0 to verify logging works."""
+        self._load_data()
+        if self._metadata is None or self._df is None or self._df.empty:
+            return
+
+        # Use only 10% of metadata entries for speed
+        subset_size = max(1, len(self._metadata) // 10)
+        metadata_subset = self._metadata[:subset_size]
+
+        model = pl_module.model
+        model.eval()
+        device = pl_module.device
+
+        embeddings = _encode_all_compounds(
+            metadata=metadata_subset,
+            root_dir=self.root_dir,
+            model=model,
+            img_size=self.img_size,
+            in_channels=self.in_channels,
+            batch_size=self.batch_size,
+            device=device,
+        )
+
+        if not embeddings:
+            print("  [ClassifierCallback] Smoke test: no embeddings produced, skipping.", flush=True)
+            return
+
+        str2idx, classes = build_label_encoder(self._df[self.label_col])
+        X, y, cids = build_mean_latent_features(
+            embeddings=embeddings,
+            compound_col=self._df[self.compound_col],
+            label_col=self._df[self.label_col],
+            label2idx=str2idx,
+            subtract_control=self.subtract_control,
+            normalize_before_subtract=self.normalize_before_subtract,
+        )
+
+        if X.shape[0] < 4:
+            print(
+                f"  [ClassifierCallback] Smoke test: only {X.shape[0]} compounds "
+                f"from 10% subset, need >=4. Skipping.", flush=True,
+            )
+            return
+
+        X, y, cids, classes, num_classes = filter_rare_classes_array(
+            X, y, cids, classes, self.min_compounds_per_class,
+        )
+
+        if num_classes < 2:
+            print("  [ClassifierCallback] Smoke test: fewer than 2 classes, skipping.", flush=True)
+            return
+
+        # Quick train/test split
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import accuracy_score, balanced_accuracy_score
+
+        strat = y if len(np.unique(y)) > 1 else None
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.3, random_state=self.seed, stratify=strat,
+        )
+
+        clf = CatBoostClassifier(
+            iterations=50, depth=3, learning_rate=0.1,
+            auto_class_weights="Balanced",
+            loss_function="MultiClass" if num_classes > 2 else "Logloss",
+            random_seed=self.seed, verbose=0,
+        )
+        clf.fit(X_train, y_train)
+        preds = clf.predict(X_test).astype(int).ravel()
+
+        smoke_metrics = {
+            "cls_test/smoke_top1_accuracy": accuracy_score(y_test, preds),
+            "cls_test/smoke_balanced_accuracy": balanced_accuracy_score(y_test, preds),
+        }
+
+        # Attempt to log — this validates that the logging pipeline works
+        if trainer.logger is not None:
+            try:
+                trainer.logger.log_metrics(smoke_metrics, step=trainer.global_step)
+                self._logging_verified = True
+                print(
+                    f"  [ClassifierCallback] Smoke test PASSED — logging works. "
+                    f"(acc={smoke_metrics['cls_test/smoke_top1_accuracy']:.3f}, "
+                    f"bal_acc={smoke_metrics['cls_test/smoke_balanced_accuracy']:.3f}, "
+                    f"{num_classes} classes, {X.shape[0]} compounds from 10% subset)",
+                    flush=True,
+                )
+            except Exception as e:
+                print(
+                    f"  [ClassifierCallback] Smoke test FAILED — logging error: {e}",
+                    flush=True,
+                )
+        else:
+            print("  [ClassifierCallback] Smoke test: no logger attached to trainer.", flush=True)
+
     def on_validation_epoch_end(
         self, trainer: pl.Trainer, pl_module: pl.LightningModule
     ) -> None:
@@ -237,13 +336,17 @@ class ChemicalClassClassifierCallback(pl.Callback):
         if not trainer.is_global_zero:
             return
 
-        # Only run every N epochs (epoch 0 is skipped to avoid noise)
-        if current_epoch == 0:
-            return
-        if current_epoch % self.eval_every_n_epochs != 0:
+        if not _HAS_CATBOOST:
             return
 
-        if not _HAS_CATBOOST:
+        # On epoch 0, run a quick smoke test on 10% of data to verify logging
+        if current_epoch == 0:
+            if not self._logging_verified:
+                self._run_logging_smoke_test(trainer, pl_module)
+            return
+
+        # Only run every N epochs
+        if current_epoch % self.eval_every_n_epochs != 0:
             return
 
         self._load_data()
