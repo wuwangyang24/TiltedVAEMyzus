@@ -94,7 +94,7 @@ def _encode_all_compounds(
     mode = ImageReadMode.GRAY if in_channels == 1 else ImageReadMode.RGB
 
     embeddings = {}
-    for entry in tqdm(metadata, desc="[ClassifierCallback] Encoding compounds"):
+    for entry in tqdm(metadata, desc="[ClassifierCallback] Encoding compounds", miniters=5000):
         compound_id = str(entry["Compound"])
         plate_dict = {}
         for plate_id, plate_data in entry.items():

@@ -48,7 +48,7 @@ INDEX_CACHE="${SCRIPT_DIR}/cache/image_index.npy"
 CLS_IMAGE_METADATA="${CLS_IMAGE_METADATA:-/home/sagemaker-user/METADATA/metadata_compound_all100ppm.json}"
 CLS_LABEL_METADATA="${CLS_LABEL_METADATA:-/home/sagemaker-user/METADATA/synthesisprogram_compoundno.csv}"
 CLS_ROOT_DIR="${CLS_ROOT_DIR:-/home/sagemaker-user/DATA_TEST/}"
-CLS_EVERY_N_EPOCHS="${CLS_EVERY_N_EPOCHS:-1}"
+CLS_EVERY_N_EPOCHS="${CLS_EVERY_N_EPOCHS:-5}"
 CLS_LABEL_COL="${CLS_LABEL_COL:-synthesis_program}"
 CLS_COMPOUND_COL="${CLS_COMPOUND_COL:-compound}"
 
