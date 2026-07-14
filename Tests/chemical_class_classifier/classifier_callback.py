@@ -167,7 +167,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
         label_col: str = "synthesis_program",
         subtract_control: bool = False,
         normalize_before_subtract: bool = False,
-        min_compounds_per_class: int = 30,
+        min_compounds_per_class: int = 31,
         test_split: float = 0.2,
         filter_by_efficacy: Optional[float] = 0,
         img_size: int = 96,
