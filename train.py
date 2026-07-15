@@ -219,6 +219,7 @@ def main() -> None:
             cb_iterations=args.cls_cb_iterations,
             seed=args.seed,
             output_dir=args.output_dir,
+            ckpt_subdir=f"{args.model}-latent{args.latent_dim}",
         )
         callbacks.append(cls_callback)
         print(f"[ClassifierCallback] Enabled — evaluating every {args.cls_every_n_epochs} epochs")

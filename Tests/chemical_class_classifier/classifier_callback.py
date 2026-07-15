@@ -177,6 +177,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
         cb_depth: int = 5,
         seed: int = 42,
         output_dir: str = "results",
+        ckpt_subdir: str = "",
     ):
         super().__init__()
         self.image_metadata_json = Path(image_metadata_json)
@@ -197,6 +198,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
         self.cb_depth = cb_depth
         self.seed = seed
         self.output_dir = Path(output_dir)
+        self.ckpt_subdir = ckpt_subdir
 
         # Pre-load static data once
         self._metadata: Optional[List[Dict]] = None
@@ -527,12 +529,15 @@ class ChemicalClassClassifierCallback(pl.Callback):
         # ── Save best checkpoint by balanced accuracy ────────────────────────
         if balanced_acc > self._best_balanced_acc:
             self._best_balanced_acc = balanced_acc
-            ckpt_dir = self.output_dir / "checkpoints"
+            ckpt_dir = self.output_dir / "checkpoints" / self.ckpt_subdir
             ckpt_dir.mkdir(parents=True, exist_ok=True)
             ckpt_path = ckpt_dir / "best_balanced_acc.ckpt"
             trainer.save_checkpoint(str(ckpt_path))
+            emb_path = ckpt_dir / "embeddings_best_balanced_acc.pt"
+            torch.save(embeddings, emb_path)
             print(
                 f"  [ClassifierCallback] New best balanced_acc={balanced_acc:.3f} "
-                f"— saved checkpoint to {ckpt_path}\n",
+                f"— saved checkpoint to {ckpt_path}\n"
+                f"  [ClassifierCallback] Saved embeddings to {emb_path}\n",
                 flush=True,
             )
