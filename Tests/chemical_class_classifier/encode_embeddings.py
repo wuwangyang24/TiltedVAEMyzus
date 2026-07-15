@@ -166,8 +166,13 @@ def encode_paths(
         batch_paths = rel_paths[start:start + batch_size]
         imgs = []
         for rel in batch_paths:
-            img = read_image(str(root_dir / rel), mode=mode)
+            full_path = root_dir / rel
+            if not full_path.exists():
+                continue
+            img = read_image(str(full_path), mode=mode)
             imgs.append(transform(img))
+        if not imgs:
+            continue
         batch = torch.stack(imgs, dim=0).to(device)
         mu, _ = model.encode(batch)
         latents.append(mu.cpu())
@@ -212,17 +217,14 @@ def main() -> None:
         class_df[args.compound_col] = class_df[args.compound_col].astype(str)
         class_df[args.label_col] = class_df[args.label_col].astype(str)
 
-        # Only consider compounds that actually exist in the JSON metadata
-        metadata_compounds = {str(e["Compound"]) for e in metadata}
-        class_df = class_df[class_df[args.compound_col].isin(metadata_compounds)]
-
         # Count unique compounds per class and keep only classes meeting the threshold
+        # (matches the callback's _get_valid_compound_ids which counts from CSV only)
+        min_cpc = max(args.min_compounds_per_class, 2)
         compounds_per_class = (
-            class_df.drop_duplicates(subset=[args.compound_col])
-            .groupby(args.label_col)[args.compound_col].nunique()
+            class_df.groupby(args.label_col)[args.compound_col].nunique()
         )
         valid_classes = set(
-            compounds_per_class[compounds_per_class >= args.min_compounds_per_class].index
+            compounds_per_class[compounds_per_class >= min_cpc].index
         )
         valid_compounds: Set[str] = set(
             class_df.loc[class_df[args.label_col].isin(valid_classes), args.compound_col]
