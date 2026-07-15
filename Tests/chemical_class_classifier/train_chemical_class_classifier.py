@@ -35,7 +35,7 @@ Usage examples
       --model      tilted --latent_dim 128 --img_size 96
 
   # 2) Train + evaluate the CatBoost chemical-class classifier
-  python Tests/chemical_class_classifier/train_chemical_class_classifier.py --embeddings Tests/chemical_class_classifier/embeddings.pt --metadata   data/compound_metadata.csv --save_predictions
+  python Tests/chemical_class_classifier/train_chemical_class_classifier.py --embeddings Tests/chemical_class_classifier/embeddings.pt --metadata ../METADATA/synthesisprogram_compoundno.csv --save_predictions
 
   # With control subtraction, softer class balancing and hyper-parameter tuning
   python Tests/chemical_class_classifier/train_chemical_class_classifier.py \
