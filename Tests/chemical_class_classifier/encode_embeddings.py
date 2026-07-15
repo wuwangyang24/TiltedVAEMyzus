@@ -212,6 +212,10 @@ def main() -> None:
         class_df[args.compound_col] = class_df[args.compound_col].astype(str)
         class_df[args.label_col] = class_df[args.label_col].astype(str)
 
+        # Only consider compounds that actually exist in the JSON metadata
+        metadata_compounds = {str(e["Compound"]) for e in metadata}
+        class_df = class_df[class_df[args.compound_col].isin(metadata_compounds)]
+
         # Count unique compounds per class and keep only classes meeting the threshold
         compounds_per_class = (
             class_df.drop_duplicates(subset=[args.compound_col])
