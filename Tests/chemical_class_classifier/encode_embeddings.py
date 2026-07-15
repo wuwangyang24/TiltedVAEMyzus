@@ -46,8 +46,10 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Set
 
+import numpy as np
+import pandas as pd
 import torch
 import torchvision.transforms as T
 from torchvision.io import ImageReadMode, read_image
@@ -83,6 +85,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--img_size", type=int, default=96)
     p.add_argument("--tau", type=float, default=None,
                    help="Tilt parameter for TiltedVAE (only used with --model tilted)")
+
+    # Pre-filtering by class membership
+    p.add_argument("--class_metadata", default=None,
+                   help="Optional CSV/Excel file with compound and class columns "
+                        "(same format as train_chemical_class_classifier.py --metadata). "
+                        "Required when using --min_compounds_per_class.")
+    p.add_argument("--compound_col", default="compound",
+                   help="Compound ID column in --class_metadata. Default: compound")
+    p.add_argument("--label_col", default="chemical_class",
+                   help="Class label column in --class_metadata. Default: chemical_class")
+    p.add_argument("--min_compounds_per_class", type=int, default=None,
+                   help="Only encode compounds belonging to classes with at least this "
+                        "many compounds. Requires --class_metadata.")
 
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--device", default=None,
@@ -184,6 +199,30 @@ def main() -> None:
     with open(args.metadata) as f:
         metadata = json.load(f)
     print(f"Metadata: {len(metadata)} compounds")
+
+    # ── Pre-filter by min_compounds_per_class ────────────────────────────────
+    if args.min_compounds_per_class is not None:
+        if args.class_metadata is None:
+            raise ValueError("--class_metadata is required when using --min_compounds_per_class")
+        ext = Path(args.class_metadata).suffix.lower()
+        if ext in (".xls", ".xlsx"):
+            class_df = pd.read_excel(args.class_metadata)
+        else:
+            class_df = pd.read_csv(args.class_metadata)
+        class_df[args.compound_col] = class_df[args.compound_col].astype(str)
+        class_df[args.label_col] = class_df[args.label_col].astype(str)
+
+        # Count compounds per class and keep only classes meeting the threshold
+        class_counts = class_df[args.label_col].value_counts()
+        valid_classes = set(class_counts[class_counts >= args.min_compounds_per_class].index)
+        valid_compounds: Set[str] = set(
+            class_df.loc[class_df[args.label_col].isin(valid_classes), args.compound_col]
+        )
+
+        before = len(metadata)
+        metadata = [e for e in metadata if str(e["Compound"]) in valid_compounds]
+        print(f"Pre-filter: kept {len(metadata)}/{before} compounds "
+              f"({len(valid_classes)} classes with >= {args.min_compounds_per_class} compounds)")
 
     embeddings = {}
     for entry in tqdm(metadata, desc="Encoding compounds"):
