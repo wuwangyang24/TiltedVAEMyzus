@@ -212,9 +212,14 @@ def main() -> None:
         class_df[args.compound_col] = class_df[args.compound_col].astype(str)
         class_df[args.label_col] = class_df[args.label_col].astype(str)
 
-        # Count compounds per class and keep only classes meeting the threshold
-        class_counts = class_df[args.label_col].value_counts()
-        valid_classes = set(class_counts[class_counts >= args.min_compounds_per_class].index)
+        # Count unique compounds per class and keep only classes meeting the threshold
+        compounds_per_class = (
+            class_df.drop_duplicates(subset=[args.compound_col])
+            .groupby(args.label_col)[args.compound_col].nunique()
+        )
+        valid_classes = set(
+            compounds_per_class[compounds_per_class >= args.min_compounds_per_class].index
+        )
         valid_compounds: Set[str] = set(
             class_df.loc[class_df[args.label_col].isin(valid_classes), args.compound_col]
         )
