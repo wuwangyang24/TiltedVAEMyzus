@@ -187,7 +187,7 @@ def compute_well_mean_embeddings(
     min_wells: int,
     max_compounds: int | None,
     subtract_control: bool = False,
-) -> Tuple[np.ndarray, List[str]]:
+) -> Tuple[np.ndarray, List[str], List[str]]:
     """Compute mean embedding per well for each compound.
 
     When ``subtract_control`` is True, the plate-level mean control embedding
@@ -197,14 +197,16 @@ def compute_well_mean_embeddings(
     Returns:
         well_embeddings: (W, D) array of mean embeddings, one per well.
         well_compound_labels: list of compound IDs, one per well.
+        well_plate_labels: list of plate IDs, one per well.
     """
     well_embeddings: List[np.ndarray] = []
     well_compound_labels: List[str] = []
+    well_plate_labels: List[str] = []
 
     compounds_processed = 0
     for entry in metadata:
         compound_id = str(entry["Compound"])
-        wells_for_compound: List[np.ndarray] = []
+        wells_for_compound: List[Tuple[np.ndarray, str]] = []
 
         for plate_id, plate_data in entry.items():
             if plate_id == "Compound":
@@ -233,38 +235,51 @@ def compute_well_mean_embeddings(
                         ctrl_mean = ctrl_latents.mean(dim=0).numpy()
                         well_mean = well_mean - ctrl_mean
 
-            wells_for_compound.append(well_mean)
+            wells_for_compound.append((well_mean, str(plate_id)))
 
         if len(wells_for_compound) >= min_wells:
-            for emb in wells_for_compound:
+            for emb, plate in wells_for_compound:
                 well_embeddings.append(emb)
                 well_compound_labels.append(compound_id)
+                well_plate_labels.append(plate)
             compounds_processed += 1
 
         if max_compounds is not None and compounds_processed >= max_compounds:
             break
 
-    return np.array(well_embeddings), well_compound_labels
+    return np.array(well_embeddings), well_compound_labels, well_plate_labels
 
 
 def compute_within_between_distances(
     well_embeddings: np.ndarray,
     well_compound_labels: List[str],
+    well_plate_labels: List[str],
     metric: str,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Separate pairwise distances into within-compound and between-compound.
 
+    Within-compound pairs are always cross-plate (by construction: each plate
+    gives one well per compound). To make the comparison fair, between-compound
+    pairs are restricted to cross-plate pairs only.
+
     Returns:
-        within_distances: distances between wells of the same compound.
-        between_distances: distances between wells of different compounds.
+        within_distances: distances between wells of the same compound (cross-plate).
+        between_distances: distances between wells of different compounds (cross-plate only).
     """
     n = len(well_compound_labels)
     within: List[float] = []
     between: List[float] = []
 
     for i, j in combinations(range(n), 2):
+        same_compound = well_compound_labels[i] == well_compound_labels[j]
+        same_plate = well_plate_labels[i] == well_plate_labels[j]
+
+        # Skip same-plate between-compound pairs to match the structural
+        # constraint of within-compound pairs (which are always cross-plate).
+        if not same_compound and same_plate:
+            continue
+
         if metric == "cosine":
-            # cosine distance = 1 - cosine_similarity
             dot = np.dot(well_embeddings[i], well_embeddings[j])
             norm_i = np.linalg.norm(well_embeddings[i])
             norm_j = np.linalg.norm(well_embeddings[j])
@@ -272,7 +287,7 @@ def compute_within_between_distances(
         else:
             dist = float(np.linalg.norm(well_embeddings[i] - well_embeddings[j]))
 
-        if well_compound_labels[i] == well_compound_labels[j]:
+        if same_compound:
             within.append(dist)
         else:
             between.append(dist)
@@ -439,7 +454,7 @@ def main() -> None:
     # ── Compute mean embeddings per well ─────────────────────────────────────
     ctrl_msg = " (subtract_control=True)" if args.subtract_control else ""
     print(f"\nEncoding wells (min_wells={args.min_wells}){ctrl_msg}...")
-    well_embeddings, well_labels = compute_well_mean_embeddings(
+    well_embeddings, well_labels, well_plates = compute_well_mean_embeddings(
         metadata, root_dir, model, transform, mode,
         args.batch_size, device, args.min_wells, args.max_compounds,
         subtract_control=args.subtract_control,
@@ -447,7 +462,8 @@ def main() -> None:
 
     n_wells = len(well_labels)
     n_compounds = len(set(well_labels))
-    print(f"Encoded {n_wells} wells from {n_compounds} compounds")
+    n_plates = len(set(well_plates))
+    print(f"Encoded {n_wells} wells from {n_compounds} compounds across {n_plates} plates")
 
     if n_wells < 3:
         print("ERROR: Not enough wells to run the test (need at least 3).")
@@ -456,7 +472,7 @@ def main() -> None:
     # ── Compute within/between distances ─────────────────────────────────────
     print(f"\nComputing pairwise {args.metric} distances...")
     within_dists, between_dists = compute_within_between_distances(
-        well_embeddings, well_labels, args.metric,
+        well_embeddings, well_labels, well_plates, args.metric,
     )
 
     if len(within_dists) == 0:
