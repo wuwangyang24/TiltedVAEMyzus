@@ -298,6 +298,83 @@ def test_kolmogorov_smirnov(
     return float(ks_stat), float(p_value)
 
 
+def plot_dimension_reduction(
+    well_embeddings: np.ndarray,
+    well_compound_labels: List[str],
+    output_dir: str,
+    seed: int = 42,
+) -> None:
+    """Visualize well mean embeddings in 2D using UMAP and t-SNE.
+
+    Produces one plot per method, with points colored by compound ID.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from sklearn.preprocessing import LabelEncoder
+
+    le = LabelEncoder()
+    numeric_labels = le.fit_transform(well_compound_labels)
+    n_compounds = len(le.classes_)
+
+    # Choose a colormap with enough distinct colors
+    cmap = plt.cm.get_cmap("tab20" if n_compounds <= 20 else "nipy_spectral",
+                           n_compounds)
+
+    methods: Dict[str, np.ndarray] = {}
+
+    # t-SNE
+    from sklearn.manifold import TSNE
+    perplexity = min(30, max(5, len(well_embeddings) - 1))
+    tsne = TSNE(n_components=2, perplexity=perplexity, random_state=seed,
+                init="pca", learning_rate="auto")
+    methods["tSNE"] = tsne.fit_transform(well_embeddings)
+
+    # UMAP (optional dependency)
+    try:
+        import umap
+        reducer = umap.UMAP(n_components=2, random_state=seed,
+                            n_neighbors=min(15, len(well_embeddings) - 1),
+                            min_dist=0.1)
+        methods["UMAP"] = reducer.fit_transform(well_embeddings)
+    except ImportError:
+        print("[dim-reduction] umap-learn not installed, skipping UMAP.")
+
+    for method_name, coords_2d in methods.items():
+        fig, ax = plt.subplots(figsize=(9, 7))
+        scatter = ax.scatter(
+            coords_2d[:, 0], coords_2d[:, 1],
+            c=numeric_labels, cmap=cmap, s=60, alpha=0.8, edgecolors="k",
+            linewidths=0.3,
+        )
+
+        # Legend (limit entries if too many compounds)
+        if n_compounds <= 20:
+            handles = []
+            for idx, compound in enumerate(le.classes_):
+                handles.append(plt.Line2D(
+                    [0], [0], marker="o", color="w",
+                    markerfacecolor=cmap(idx / max(n_compounds - 1, 1)),
+                    markersize=8, label=compound,
+                ))
+            ax.legend(handles=handles, title="Compound", loc="best",
+                      fontsize=7, ncol=max(1, n_compounds // 10))
+        else:
+            cbar = fig.colorbar(scatter, ax=ax, shrink=0.8)
+            cbar.set_label("Compound index")
+
+        ax.set_xlabel(f"{method_name} 1")
+        ax.set_ylabel(f"{method_name} 2")
+        ax.set_title(f"Well mean embeddings – {method_name}\n"
+                     f"({n_compounds} compounds, {len(well_embeddings)} wells)")
+        fig.tight_layout()
+
+        out_path = os.path.join(output_dir, f"well_embeddings_{method_name}.png")
+        fig.savefig(out_path, dpi=150)
+        plt.close(fig)
+        print(f"[plot] Saved {method_name} visualization to {out_path}")
+
+
 def plot_distance_distributions(
     within: np.ndarray,
     between: np.ndarray,
@@ -413,6 +490,12 @@ def main() -> None:
     os.makedirs(args.output_dir, exist_ok=True)
     plot_path = os.path.join(args.output_dir, f"well_compound_distances_{args.metric}.png")
     plot_distance_distributions(within_dists, between_dists, args.metric, plot_path)
+
+    # ── Dimension reduction visualization ────────────────────────────────────
+    print("\nGenerating dimension reduction plots...")
+    plot_dimension_reduction(
+        well_embeddings, well_labels, args.output_dir, seed=args.seed,
+    )
 
     sys.exit(0 if passed else 1)
 
