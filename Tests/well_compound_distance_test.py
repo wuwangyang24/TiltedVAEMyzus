@@ -89,6 +89,9 @@ def parse_args() -> argparse.Namespace:
                         help="Limit the number of compounds to process (for speed)")
     parser.add_argument("--min_wells", type=int, default=2,
                         help="Minimum wells per compound to include it (default: 2)")
+    parser.add_argument("--subtract_control", action="store_true",
+                        help="Subtract the plate-level mean control embedding from "
+                             "each treated well embedding before computing distances")
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default=None,
@@ -183,8 +186,13 @@ def compute_well_mean_embeddings(
     device: torch.device,
     min_wells: int,
     max_compounds: int | None,
+    subtract_control: bool = False,
 ) -> Tuple[np.ndarray, List[str]]:
     """Compute mean embedding per well for each compound.
+
+    When ``subtract_control`` is True, the plate-level mean control embedding
+    is subtracted from the treated well mean embedding, removing plate-specific
+    batch effects.
 
     Returns:
         well_embeddings: (W, D) array of mean embeddings, one per well.
@@ -212,6 +220,19 @@ def compute_well_mean_embeddings(
             if latents.numel() == 0:
                 continue
             well_mean = latents.mean(dim=0).numpy()
+
+            # Optionally subtract plate-level control mean
+            if subtract_control:
+                control_paths = plate_data.get("control", [])
+                if control_paths:
+                    ctrl_latents = encode_paths(
+                        control_paths, root_dir, model, transform, mode,
+                        batch_size, device,
+                    )
+                    if ctrl_latents.numel() > 0:
+                        ctrl_mean = ctrl_latents.mean(dim=0).numpy()
+                        well_mean = well_mean - ctrl_mean
+
             wells_for_compound.append(well_mean)
 
         if len(wells_for_compound) >= min_wells:
