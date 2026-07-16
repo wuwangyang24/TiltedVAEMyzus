@@ -82,9 +82,11 @@ def parse_args() -> argparse.Namespace:
                         help="Tilt parameter for TiltedVAE (only used with --model tilted)")
 
     # Test config
-    parser.add_argument("--metric", type=str, default="euclidean",
-                        choices=["euclidean", "cosine"],
-                        help="Distance metric for comparing mean embeddings")
+    parser.add_argument("--metric", type=str, default="angular",
+                        choices=["euclidean", "cosine", "angular"],
+                        help="Distance metric for comparing mean embeddings. "
+                             "'angular' (default) computes geodesic distance on the "
+                             "hypersphere, suited for TiltedVAE embeddings.")
     parser.add_argument("--max_compounds", type=int, default=None,
                         help="Limit the number of compounds to process (for speed)")
     parser.add_argument("--min_wells", type=int, default=2,
@@ -280,10 +282,21 @@ def compute_within_between_distances(
             continue
 
         if metric == "cosine":
+            # cosine distance = 1 - cosine_similarity
             dot = np.dot(well_embeddings[i], well_embeddings[j])
             norm_i = np.linalg.norm(well_embeddings[i])
             norm_j = np.linalg.norm(well_embeddings[j])
             dist = 1.0 - dot / (norm_i * norm_j + 1e-8)
+        elif metric == "angular":
+            # Geodesic (arc) distance on hypersphere: arccos(cos_sim)
+            # Returns angle in radians [0, pi]
+            dot = np.dot(well_embeddings[i], well_embeddings[j])
+            norm_i = np.linalg.norm(well_embeddings[i])
+            norm_j = np.linalg.norm(well_embeddings[j])
+            cos_sim = dot / (norm_i * norm_j + 1e-8)
+            # Clamp for numerical stability
+            cos_sim = np.clip(cos_sim, -1.0, 1.0)
+            dist = float(np.arccos(cos_sim))
         else:
             dist = float(np.linalg.norm(well_embeddings[i] - well_embeddings[j]))
 
