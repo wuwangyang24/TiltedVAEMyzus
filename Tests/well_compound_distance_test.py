@@ -83,10 +83,11 @@ def parse_args() -> argparse.Namespace:
 
     # Test config
     parser.add_argument("--metric", type=str, default="angular",
-                        choices=["euclidean", "cosine", "angular"],
+                        choices=["euclidean", "cosine", "angular", "radial"],
                         help="Distance metric for comparing mean embeddings. "
                              "'angular' (default) computes geodesic distance on the "
-                             "hypersphere, suited for TiltedVAE embeddings.")
+                             "hypersphere. 'radial' computes | ||mu_i|| - ||mu_j|| |, "
+                             "the difference in radius from origin.")
     parser.add_argument("--max_compounds", type=int, default=None,
                         help="Limit the number of compounds to process (for speed)")
     parser.add_argument("--min_wells", type=int, default=2,
@@ -297,6 +298,11 @@ def compute_within_between_distances(
             # Clamp for numerical stability
             cos_sim = np.clip(cos_sim, -1.0, 1.0)
             dist = float(np.arccos(cos_sim))
+        elif metric == "radial":
+            # Absolute difference in norms: | ||mu_i|| - ||mu_j|| |
+            norm_i = np.linalg.norm(well_embeddings[i])
+            norm_j = np.linalg.norm(well_embeddings[j])
+            dist = float(abs(norm_i - norm_j))
         else:
             dist = float(np.linalg.norm(well_embeddings[i] - well_embeddings[j]))
 
@@ -433,6 +439,87 @@ def plot_distance_distributions(
     print(f"[plot] Saved distance histogram to {output_path}")
 
 
+def plot_radial_deviation(
+    well_embeddings: np.ndarray,
+    well_compound_labels: List[str],
+    gamma: float,
+    output_dir: str,
+) -> None:
+    """Diagnostic: plot distribution of ||mu|| - gamma per compound.
+
+    Shows how far each well's mean embedding deviates from the expected
+    hypersphere radius. Ideally all wells sit close to gamma.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    norms = np.linalg.norm(well_embeddings, axis=1)
+    deviations = norms - gamma
+
+    unique_compounds = sorted(set(well_compound_labels))
+    n_compounds = len(unique_compounds)
+
+    # ── Summary statistics ───────────────────────────────────────────────────
+    print(f"\n{'─'*70}")
+    print(f"RADIAL DEVIATION DIAGNOSTIC  (gamma = {gamma:.4f})")
+    print(f"{'─'*70}")
+    print(f"  ||mu|| : mean = {norms.mean():.4f}, std = {norms.std():.4f}")
+    print(f"  ||mu|| - gamma : mean = {deviations.mean():.4f}, "
+          f"std = {deviations.std():.4f}")
+    print(f"  Range: [{deviations.min():.4f}, {deviations.max():.4f}]")
+
+    # Per-compound radial stats
+    print(f"\n  Per-compound ||mu|| - gamma (mean ± std):")
+    compound_devs = {}
+    for compound in unique_compounds:
+        mask = [l == compound for l in well_compound_labels]
+        c_devs = deviations[mask]
+        compound_devs[compound] = c_devs
+        if len(unique_compounds) <= 20:
+            print(f"    Compound {compound:>6s}: {c_devs.mean():+.4f} ± {c_devs.std():.4f} "
+                  f"(n={len(c_devs)})")
+    print(f"{'─'*70}")
+
+    # ── Plot 1: Overall deviation histogram ──────────────────────────────────
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.hist(deviations, bins=40, alpha=0.7, color="#1f77b4", edgecolor="k",
+            linewidth=0.5)
+    ax.axvline(0, color="red", linestyle="--", linewidth=1.5,
+               label=f"γ = {gamma:.2f}")
+    ax.axvline(deviations.mean(), color="orange", linestyle="-", linewidth=1.5,
+               label=f"mean dev = {deviations.mean():.4f}")
+    ax.set_xlabel("||μ|| − γ")
+    ax.set_ylabel("Count")
+    ax.set_title("Radial deviation of well mean embeddings from hypersphere")
+    ax.legend()
+    fig.tight_layout()
+    out_path = os.path.join(output_dir, "radial_deviation_histogram.png")
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"[plot] Saved radial deviation histogram to {out_path}")
+
+    # ── Plot 2: Per-compound box plot ────────────────────────────────────────
+    if n_compounds <= 30:
+        fig, ax = plt.subplots(figsize=(max(8, n_compounds * 0.5), 5))
+        data = [compound_devs[c] for c in unique_compounds]
+        bp = ax.boxplot(data, labels=unique_compounds, patch_artist=True)
+        for patch in bp["boxes"]:
+            patch.set_facecolor("#aec7e8")
+        ax.axhline(0, color="red", linestyle="--", linewidth=1, label="γ (expected radius)")
+        ax.set_xlabel("Compound")
+        ax.set_ylabel("||μ|| − γ")
+        ax.set_title("Radial deviation per compound")
+        ax.legend()
+        if n_compounds > 10:
+            ax.tick_params(axis="x", rotation=45)
+        fig.tight_layout()
+        out_path = os.path.join(output_dir, "radial_deviation_per_compound.png")
+        fig.savefig(out_path, dpi=150)
+        plt.close(fig)
+        print(f"[plot] Saved per-compound radial deviation to {out_path}")
+
+
 def main() -> None:
     args = parse_args()
     torch.manual_seed(args.seed)
@@ -529,6 +616,12 @@ def main() -> None:
     os.makedirs(args.output_dir, exist_ok=True)
     plot_path = os.path.join(args.output_dir, f"well_compound_distances_{args.metric}.png")
     plot_distance_distributions(within_dists, between_dists, args.metric, plot_path)
+
+    # ── Radial deviation diagnostic (TiltedVAE) ─────────────────────────────
+    if hasattr(model, "gamma"):
+        plot_radial_deviation(
+            well_embeddings, well_labels, model.gamma, args.output_dir,
+        )
 
     # ── Dimension reduction visualization ────────────────────────────────────
     print("\nGenerating dimension reduction plots...")
