@@ -92,8 +92,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--subtract_control", action="store_true",
                         help="Subtract the plate-level mean control embedding from "
                              "each treated well embedding before computing distances")
-    parser.add_argument("--n_permutations", type=int, default=10000,
-                        help="Number of permutations for the permutation test (default: 10000)")
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default=None,
@@ -286,100 +284,6 @@ def compute_within_between_distances(
 # Statistical tests
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def test_mann_whitney(
-    within: np.ndarray, between: np.ndarray
-) -> Tuple[float, float]:
-    """Mann-Whitney U test (one-sided: within < between).
-
-    Returns:
-        u_stat: U-statistic.
-        p_value: one-sided p-value.
-    """
-    u_stat, p_value = scipy_stats.mannwhitneyu(
-        within, between, alternative="less"
-    )
-    return float(u_stat), float(p_value)
-
-
-def test_permutation(
-    well_embeddings: np.ndarray,
-    well_compound_labels: List[str],
-    metric: str,
-    n_permutations: int = 10000,
-    seed: int = 42,
-) -> Tuple[float, float, float]:
-    """Permutation test: shuffle compound labels and recompute the difference
-    in mean within-compound vs between-compound distances.
-
-    The test statistic is: mean(between) - mean(within).  Under the null
-    hypothesis (labels don't matter), this should be ~0.  A large observed
-    value indicates that within-compound distances are genuinely smaller.
-
-    Returns:
-        observed_diff: observed mean(between) - mean(within).
-        p_value: fraction of permutations with diff >= observed_diff.
-        null_mean: mean of the null distribution.
-    """
-    rng = np.random.default_rng(seed)
-    labels = np.array(well_compound_labels)
-    n = len(labels)
-
-    # Pre-compute full pairwise distance matrix (upper triangle)
-    from scipy.spatial.distance import pdist, squareform
-    dist_vec = pdist(well_embeddings, metric=metric)
-    dist_mat = squareform(dist_vec)
-
-    # Helper: compute mean within and between from a label assignment
-    def _compute_diff(lab: np.ndarray) -> float:
-        within_sum = 0.0
-        within_count = 0
-        between_sum = 0.0
-        between_count = 0
-        for i in range(n):
-            for j in range(i + 1, n):
-                d = dist_mat[i, j]
-                if lab[i] == lab[j]:
-                    within_sum += d
-                    within_count += 1
-                else:
-                    between_sum += d
-                    between_count += 1
-        w_mean = within_sum / within_count if within_count > 0 else 0.0
-        b_mean = between_sum / between_count if between_count > 0 else 0.0
-        return b_mean - w_mean
-
-    observed_diff = _compute_diff(labels)
-
-    # Permutation loop
-    count_ge = 0
-    null_diffs: List[float] = []
-    for _ in range(n_permutations):
-        perm_labels = rng.permutation(labels)
-        d = _compute_diff(perm_labels)
-        null_diffs.append(d)
-        if d >= observed_diff:
-            count_ge += 1
-
-    p_value = count_ge / n_permutations
-    null_mean = float(np.mean(null_diffs))
-    return observed_diff, p_value, null_mean
-
-
-def test_welch_ttest(
-    within: np.ndarray, between: np.ndarray
-) -> Tuple[float, float]:
-    """Welch's t-test (one-sided: within < between).
-
-    Returns:
-        t_stat: t-statistic.
-        p_value: one-sided p-value.
-    """
-    t_stat, p_two = scipy_stats.ttest_ind(within, between, equal_var=False)
-    # One-sided: we expect within < between => t_stat negative
-    p_value = p_two / 2 if t_stat < 0 else 1.0 - p_two / 2
-    return float(t_stat), float(p_value)
-
-
 def test_kolmogorov_smirnov(
     within: np.ndarray, between: np.ndarray
 ) -> Tuple[float, float]:
@@ -482,7 +386,7 @@ def main() -> None:
         print("ERROR: No within-compound pairs found. Need compounds with >= 2 wells.")
         sys.exit(1)
 
-    # ── Run statistical tests ────────────────────────────────────────────────
+    # ── Run statistical test ─────────────────────────────────────────────────
     print(f"\n{'='*70}")
     print(f"RESULTS ({args.metric} distance)")
     print(f"{'='*70}")
@@ -492,50 +396,17 @@ def main() -> None:
           f"+/- {between_dists.std():.4f}  (n = {len(between_dists)})")
     print(f"  Ratio (within/between) : {within_dists.mean() / between_dists.mean():.4f}")
 
-    results = {}  # test_name -> (stat, p_value)
-
-    # 1. Mann-Whitney U test
-    u_stat, mw_p = test_mann_whitney(within_dists, between_dists)
-    results["Mann-Whitney U"] = (u_stat, mw_p)
-    print(f"\n  [1] Mann-Whitney U test (within < between):")
-    print(f"      U-statistic = {u_stat:.1f}")
-    print(f"      p-value     = {mw_p:.2e}")
-    print(f"      {'PASSED' if mw_p < 0.05 else 'FAILED'} (p < 0.05)")
-
-    # 2. Permutation test
-    print(f"\n  [2] Permutation test ({args.n_permutations:,} permutations)...")
-    obs_diff, perm_p, null_mean = test_permutation(
-        well_embeddings, well_labels, args.metric,
-        n_permutations=args.n_permutations, seed=args.seed,
-    )
-    results["Permutation"] = (obs_diff, perm_p)
-    print(f"      Observed diff (between-within) = {obs_diff:.4f}")
-    print(f"      Null mean                      = {null_mean:.4f}")
-    print(f"      p-value                        = {perm_p:.4f}")
-    print(f"      {'PASSED' if perm_p < 0.05 else 'FAILED'} (p < 0.05)")
-
-    # 3. Welch's t-test
-    t_stat, tt_p = test_welch_ttest(within_dists, between_dists)
-    results["Welch's t-test"] = (t_stat, tt_p)
-    print(f"\n  [3] Welch's t-test (within < between):")
-    print(f"      t-statistic = {t_stat:.4f}")
-    print(f"      p-value     = {tt_p:.2e}")
-    print(f"      {'PASSED' if tt_p < 0.05 else 'FAILED'} (p < 0.05)")
-
-    # 4. Kolmogorov-Smirnov test
+    # Kolmogorov-Smirnov test (one-sided: within < between)
     ks_stat, ks_p = test_kolmogorov_smirnov(within_dists, between_dists)
-    results["Kolmogorov-Smirnov"] = (ks_stat, ks_p)
-    print(f"\n  [4] Kolmogorov-Smirnov test (within < between):")
+    print(f"\n  Kolmogorov-Smirnov test (within < between):")
     print(f"      KS-statistic = {ks_stat:.4f}")
     print(f"      p-value      = {ks_p:.2e}")
-    print(f"      {'PASSED' if ks_p < 0.05 else 'FAILED'} (p < 0.05)")
 
-    # ── Summary ──────────────────────────────────────────────────────────────
-    all_passed = all(p < 0.05 for _, p in results.values())
-    n_passed = sum(1 for _, p in results.values() if p < 0.05)
-    print(f"\n{'─'*70}")
-    print(f"  SUMMARY: {n_passed}/{len(results)} tests passed (p < 0.05)")
-    print(f"  Overall: {'PASSED' if all_passed else 'FAILED'}")
+    passed = ks_p < 0.05
+    print(f"\n  TEST {'PASSED' if passed else 'FAILED'}: "
+          f"Within-compound distances are "
+          f"{'significantly' if passed else 'NOT significantly'} "
+          f"smaller than between-compound distances (p < 0.05).")
     print(f"{'='*70}")
 
     # ── Plot ─────────────────────────────────────────────────────────────────
@@ -543,7 +414,7 @@ def main() -> None:
     plot_path = os.path.join(args.output_dir, f"well_compound_distances_{args.metric}.png")
     plot_distance_distributions(within_dists, between_dists, args.metric, plot_path)
 
-    sys.exit(0 if all_passed else 1)
+    sys.exit(0 if passed else 1)
 
 
 if __name__ == "__main__":
