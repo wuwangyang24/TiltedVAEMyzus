@@ -463,6 +463,16 @@ def main() -> None:
         print("ERROR: No within-compound pairs found. Need compounds with >= 2 wells.")
         sys.exit(1)
 
+    # Subsample between-compound distances to match within-compound count
+    if len(between_dists) > len(within_dists):
+        rng = np.random.default_rng(args.seed)
+        subsample_idx = rng.choice(
+            len(between_dists), size=len(within_dists), replace=False
+        )
+        between_dists = between_dists[subsample_idx]
+        print(f"  Subsampled between-compound pairs to n={len(between_dists)} "
+              f"(matching within-compound count)")
+
     # ── Run statistical test ─────────────────────────────────────────────────
     print(f"\n{'='*70}")
     print(f"RESULTS ({args.metric} distance)")
