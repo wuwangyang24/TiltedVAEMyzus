@@ -342,10 +342,12 @@ def main() -> None:
     mode = ImageReadMode.GRAY if args.in_channels == 1 else ImageReadMode.RGB
 
     # ── Compute mean embeddings per well ─────────────────────────────────────
-    print(f"\nEncoding wells (min_wells={args.min_wells})...")
+    ctrl_msg = " (subtract_control=True)" if args.subtract_control else ""
+    print(f"\nEncoding wells (min_wells={args.min_wells}){ctrl_msg}...")
     well_embeddings, well_labels = compute_well_mean_embeddings(
         metadata, root_dir, model, transform, mode,
         args.batch_size, device, args.min_wells, args.max_compounds,
+        subtract_control=args.subtract_control,
     )
 
     n_wells = len(well_labels)
