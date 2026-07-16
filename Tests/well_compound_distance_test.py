@@ -34,11 +34,7 @@ replicate). A compound must have at least 2 wells to contribute within-compound
 distances.
 
 Usage:
-    python Tests/well_compound_distance_test.py \
-        --metadata ../METADATA/metadata_compound_all100ppm.json \
-        --root_dir ../DATA_TEST/ \
-        --checkpoint results/checkpoints/last.ckpt \
-        --model tilted --latent_dim 128 --img_size 96 --device cpu
+python Tests/well_compound_distance_test.py --metadata ../METADATA/metadata_compound_all100ppm.json --root_dir ../DATA_TEST/ --checkpoint results/checkpoints/tilted-latent128/best_balanced_acc.ckpt --model tilted --latent_dim 128 --img_size 96 --device cpu --max_compounds 10
 """
 import argparse
 import json
