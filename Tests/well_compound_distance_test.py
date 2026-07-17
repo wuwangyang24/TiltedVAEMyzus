@@ -95,6 +95,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--subtract_control", action="store_true",
                         help="Subtract the plate-level mean control embedding from "
                              "each treated well embedding before computing distances")
+    parser.add_argument("--normalize_before_subtract", action="store_true",
+                        help="L2-normalize treated and control mean embeddings "
+                             "before subtracting control (only used with --subtract_control)")
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default=None,
@@ -181,6 +184,7 @@ def compute_well_mean_embeddings(
     min_wells: int,
     max_compounds: "int | None",
     subtract_control: bool = False,
+    normalize_before_subtract: bool = False,
 ) -> Tuple[np.ndarray, List[str], List[str]]:
     """Compute mean embedding per well for each compound.
 
@@ -227,6 +231,9 @@ def compute_well_mean_embeddings(
                     )
                     if ctrl_latents.numel() > 0:
                         ctrl_mean = ctrl_latents.mean(dim=0).numpy()
+                        if normalize_before_subtract:
+                            well_mean = well_mean / (np.linalg.norm(well_mean) + 1e-8)
+                            ctrl_mean = ctrl_mean / (np.linalg.norm(ctrl_mean) + 1e-8)
                         well_mean = well_mean - ctrl_mean
 
             wells_for_compound.append((well_mean, str(plate_id)))
@@ -549,6 +556,7 @@ def main() -> None:
         metadata, root_dir, model, transform, mode,
         args.batch_size, device, args.min_wells, args.max_compounds,
         subtract_control=args.subtract_control,
+        normalize_before_subtract=args.normalize_before_subtract,
     )
 
     n_wells = len(well_labels)
