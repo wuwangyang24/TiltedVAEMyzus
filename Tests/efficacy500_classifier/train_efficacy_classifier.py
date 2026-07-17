@@ -20,7 +20,7 @@ Usage
       --inference_embeddings Tests/efficacy500_classifier/embeddings_100ppm.pt \
 =======
   # XGBoost (default)
-python TiltedVAEMyzus/Tests/efficacy500_classifier/train_efficacy_classifier.py --classifier xgboost --embeddings TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_20ppm.pt --efficacy TiltedVAEMyzus/Tests/efficacy500_classifier/efficacy.pt --inference_embeddings TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_100ppm.pt --inference_efficacy TiltedVAEMyzus/Tests/efficacy500_classifier/compounds500ppm.csv
+python TiltedVAEMyzus/Tests/efficacy500_classifier/train_efficacy_classifier.py --embeddings TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_20ppm.pt --efficacy TiltedVAEMyzus/Tests/efficacy500_classifier/efficacy.pt --inference_embeddings TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_100ppm.pt --inference_efficacy TiltedVAEMyzus/Tests/efficacy500_classifier/compounds500ppm.csv --subtract_control --normalize_before_subtract --scale_pos_weight
 
   # CatBoost
   python Tests/efficacy500_classifier/train_efficacy_classifier.py \\
