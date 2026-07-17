@@ -368,8 +368,10 @@ def main() -> None:
         ax.axis("off")
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         fig.tight_layout()
-        fig.savefig(out_dir / f"compound_{compound_id}_heatmap.png", dpi=150)
+        heatmap_path = out_dir / f"compound_{compound_id}_heatmap.png"
+        fig.savefig(heatmap_path, dpi=150)
         plt.close(fig)
+        print(f"    Saved heatmap to {heatmap_path}")
 
         # Optionally also decode the raw treated embeddings for side-by-side comparison
         if args.also_decode_treated:
