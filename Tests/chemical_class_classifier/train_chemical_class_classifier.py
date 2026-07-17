@@ -122,8 +122,8 @@ def parse_args() -> argparse.Namespace:
     # ---- CatBoost hyper-parameters ----
     p.add_argument("--cb_iterations", type=int, default=300,
                    help="[CatBoost] Number of boosting iterations. Default: 300")
-    p.add_argument("--cb_depth", type=int, default=9,
-                   help="[CatBoost] Tree depth. Default: 9")
+    p.add_argument("--cb_depth", type=int, default=5,
+                   help="[CatBoost] Tree depth. Default: 5")
     p.add_argument("--cb_learning_rate", type=float, default=0.1,
                    help="[CatBoost] Learning rate. Default: 0.1")
     p.add_argument("--cb_l2_leaf_reg", type=float, default=1.0,
