@@ -67,6 +67,7 @@ Output
 """
 
 import argparse
+import json
 import sys
 import warnings
 from pathlib import Path
@@ -100,6 +101,8 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.model_selection import StratifiedKFold
+
+from Models import VAE, TiltedVAE
 
 try:
     from .classifier_utils import (
@@ -150,11 +153,18 @@ def parse_args() -> argparse.Namespace:
         help="Classifier to use: 'xgboost', 'catboost' (mean-pooled), 'abmil' (gated attention MIL), or 'logsumexp' (LogSumExp MIL) (default: xgboost)",
     )
 
+    # ── Precomputed embeddings (skip encoding) ──
+    p.add_argument(
+        "--embedding",
+        action="store_true",
+        help="Use precomputed embeddings from --embeddings and --inference_embeddings instead of encoding on the fly",
+    )
+
     # ── Training data ──
     p.add_argument(
         "--embeddings",
         default="Tests/efficacy500_classifier/embeddings_20ppm.pt",
-        help="Training embeddings (default: Tests/efficacy500_classifier/embeddings_20ppm.pt)",
+        help="Training embeddings .pt file (used when --embedding is set)",
     )
     p.add_argument(
         "--efficacy",
@@ -192,13 +202,33 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--inference_embeddings",
         default="Tests/efficacy500_classifier/embeddings_100ppm.pt",
-        help="Inference embeddings (default: Tests/efficacy500_classifier/embeddings_100ppm.pt)",
+        help="Inference embeddings .pt file (used when --embedding is set)",
     )
     p.add_argument(
         "--inference_efficacy",
         default="Tests/efficacy500_classifier/efficacy_500ppm.csv",
         help="Ground-truth efficacy for inference evaluation CSV with 'Compound No' and 'Active' columns (default: Tests/efficacy500_classifier/efficacy_500ppm.csv)",
     )
+
+    # ── On-the-fly encoding (used when --embedding is NOT set) ──
+    p.add_argument("--checkpoint", default=None,
+                   help="Trained model checkpoint (.ckpt or .pt) for on-the-fly encoding (required if --embedding is not set)")
+    p.add_argument("--model", default="tilted", choices=["vae", "tilted"],
+                   help="Model architecture matching the checkpoint (default: tilted)")
+    p.add_argument("--in_channels", type=int, default=3, help="Number of input channels (default: 3)")
+    p.add_argument("--latent_dim", type=int, default=128, help="Latent dimension (default: 128)")
+    p.add_argument("--img_size", type=int, default=96, help="Image size for encoding (default: 96)")
+    p.add_argument("--tau", type=float, default=None,
+                   help="Tilt parameter for TiltedVAE (only used with --model tilted)")
+    p.add_argument("--train_metadata", default=None,
+                   help="JSON metadata file for training compounds (required if --embedding is not set)")
+    p.add_argument("--train_root_dir", default=None,
+                   help="Base image directory for training compounds (required if --embedding is not set)")
+    p.add_argument("--inference_metadata", default=None,
+                   help="JSON metadata file for inference compounds (required if --embedding is not set)")
+    p.add_argument("--inference_root_dir", default=None,
+                   help="Base image directory for inference compounds (required if --embedding is not set)")
+    p.add_argument("--batch_size", type=int, default=64, help="Batch size for encoding (default: 64)")
 
     # ── Threshold ──
     p.add_argument(
@@ -622,6 +652,125 @@ def _run_catboost(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# On-the-fly encoding helpers
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _build_encoder(args: argparse.Namespace, device: torch.device) -> torch.nn.Module:
+    """Build and load a VAE/TiltedVAE encoder from checkpoint."""
+    import torchvision.transforms as T  # noqa: F811
+
+    if args.model == "tilted":
+        model = TiltedVAE(
+            in_channels=args.in_channels,
+            latent_dim=args.latent_dim,
+            tau=args.tau,
+            img_size=args.img_size,
+        )
+    else:
+        model = VAE(
+            in_channels=args.in_channels,
+            latent_dim=args.latent_dim,
+            img_size=args.img_size,
+        )
+
+    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    if isinstance(ckpt, dict) and "state_dict" in ckpt:
+        state_dict = ckpt["state_dict"]
+    else:
+        state_dict = ckpt
+    cleaned = {}
+    for k, v in state_dict.items():
+        cleaned[k[len("model."):] if k.startswith("model.") else k] = v
+    model.load_state_dict(cleaned, strict=False)
+    model.to(device).eval()
+    for param in model.parameters():
+        param.requires_grad = False
+    return model
+
+
+def _encode_metadata(
+    metadata_path: str,
+    root_dir: str,
+    model: torch.nn.Module,
+    args: argparse.Namespace,
+    device: torch.device,
+) -> Dict:
+    """Encode all compounds from a JSON metadata file into embeddings dict."""
+    import torchvision.transforms as T
+    from torchvision.io import ImageReadMode, read_image as _read_image
+
+    transform = T.Compose([
+        T.Resize((args.img_size, args.img_size), antialias=True),
+        T.ConvertImageDtype(torch.float32),
+    ])
+    mode = ImageReadMode.GRAY if args.in_channels == 1 else ImageReadMode.RGB
+    root = Path(root_dir)
+
+    with open(metadata_path) as f:
+        metadata = json.load(f)
+    print(f"  Metadata: {len(metadata)} compounds from {metadata_path}")
+
+    embeddings = {}
+    for entry in metadata:
+        compound_id = str(entry["Compound"])
+        plate_dict = {}
+        for plate_id, plate_data in entry.items():
+            if plate_id == "Compound":
+                continue
+            treated_paths = plate_data.get("treated", [])
+            control_paths = plate_data.get("control", [])
+            plate_entry = {}
+
+            if treated_paths:
+                latents = []
+                for start in range(0, len(treated_paths), args.batch_size):
+                    batch_paths = treated_paths[start:start + args.batch_size]
+                    imgs = []
+                    for rel in batch_paths:
+                        full_path = root / rel
+                        if not full_path.exists():
+                            continue
+                        img = _read_image(str(full_path), mode=mode)
+                        imgs.append(transform(img))
+                    if imgs:
+                        batch = torch.stack(imgs, dim=0).to(device)
+                        with torch.no_grad():
+                            mu, _ = model.encode(batch)
+                        latents.append(mu.cpu())
+                if latents:
+                    plate_entry["treated"] = torch.cat(latents, dim=0)
+
+            if control_paths:
+                latents = []
+                for start in range(0, len(control_paths), args.batch_size):
+                    batch_paths = control_paths[start:start + args.batch_size]
+                    imgs = []
+                    for rel in batch_paths:
+                        full_path = root / rel
+                        if not full_path.exists():
+                            continue
+                        img = _read_image(str(full_path), mode=mode)
+                        imgs.append(transform(img))
+                    if imgs:
+                        batch = torch.stack(imgs, dim=0).to(device)
+                        with torch.no_grad():
+                            mu, _ = model.encode(batch)
+                        latents.append(mu.cpu())
+                if latents:
+                    plate_entry["control"] = torch.cat(latents, dim=0).mean(dim=0)
+
+            if plate_entry:
+                plate_dict[str(plate_id)] = plate_entry
+
+        if plate_dict:
+            embeddings[compound_id] = plate_dict
+
+    print(f"  Encoded {len(embeddings)} compounds.")
+    return embeddings
+
+
 def main() -> None:
     args = parse_args()
 
@@ -640,10 +789,24 @@ def main() -> None:
     output_dir = Path(args.output_dir) / args.model_name / args.classifier / subtract_suffix
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Load training data ───────────────────────────────────────────────
-    print(f"Loading embeddings : {args.embeddings}")
-    embeddings = torch.load(args.embeddings, map_location="cpu", weights_only=False)
-    print(f"  {len(embeddings)} compounds in embeddings.")
+    # ── Load or encode training embeddings ───────────────────────────────
+    encoder = None
+    if args.embedding:
+        # Use precomputed embeddings
+        print(f"Loading precomputed embeddings : {args.embeddings}")
+        embeddings = torch.load(args.embeddings, map_location="cpu", weights_only=False)
+        print(f"  {len(embeddings)} compounds in embeddings.")
+    else:
+        # Encode on the fly
+        if not args.checkpoint:
+            raise ValueError("--checkpoint is required when --embedding is not set")
+        if not args.train_metadata:
+            raise ValueError("--train_metadata is required when --embedding is not set")
+        if not args.train_root_dir:
+            raise ValueError("--train_root_dir is required when --embedding is not set")
+        print("Encoding training embeddings on the fly ...")
+        encoder = _build_encoder(args, device)
+        embeddings = _encode_metadata(args.train_metadata, args.train_root_dir, encoder, args, device)
 
     print(f"Loading efficacy   : {args.efficacy}")
     efficacy = load_efficacy(args.efficacy)
@@ -654,10 +817,20 @@ def main() -> None:
     n_inactive = sum(v == 0 for v in cid2label.values())
     print(f"  Threshold: {args.threshold}  ->  {n_active} active, {n_inactive} inactive")
 
-    # ── Load inference data ──────────────────────────────────────────────
-    print(f"Loading inference embeddings : {args.inference_embeddings}")
-    inf_embeddings = torch.load(args.inference_embeddings, map_location="cpu", weights_only=False)
-    print(f"  {len(inf_embeddings)} compounds in inference embeddings.")
+    # ── Load or encode inference embeddings ──────────────────────────────
+    if args.embedding:
+        print(f"Loading precomputed inference embeddings : {args.inference_embeddings}")
+        inf_embeddings = torch.load(args.inference_embeddings, map_location="cpu", weights_only=False)
+        print(f"  {len(inf_embeddings)} compounds in inference embeddings.")
+    else:
+        if not args.inference_metadata:
+            raise ValueError("--inference_metadata is required when --embedding is not set")
+        if not args.inference_root_dir:
+            raise ValueError("--inference_root_dir is required when --embedding is not set")
+        print("Encoding inference embeddings on the fly ...")
+        if encoder is None:
+            encoder = _build_encoder(args, device)
+        inf_embeddings = _encode_metadata(args.inference_metadata, args.inference_root_dir, encoder, args, device)
 
     print(f"Loading inference efficacy   : {args.inference_efficacy}")
     inf_cid2label = load_inference_labels(args.inference_efficacy)
