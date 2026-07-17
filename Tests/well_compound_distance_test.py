@@ -66,12 +66,20 @@ def parse_args() -> argparse.Namespace:
     # Data
     parser.add_argument("--metadata", type=str, required=True,
                         help="JSON metadata file mapping compounds -> plates -> paths")
-    parser.add_argument("--root_dir", type=str, required=True,
-                        help="Base directory prepended to relative image paths")
+    parser.add_argument("--root_dir", type=str, default=None,
+                        help="Base directory prepended to relative image paths "
+                             "(required unless --embedding is provided)")
+
+    # Pre-computed embeddings (skip encoding)
+    parser.add_argument("--embedding", type=str, default=None,
+                        help="Path to a pre-computed embedding .pt file from "
+                             "encode_embeddings.py. If provided, skips model loading "
+                             "and encoding entirely.")
 
     # Model / checkpoint
-    parser.add_argument("--checkpoint", type=str, required=True,
-                        help="Trained Lightning checkpoint (.ckpt) or state_dict (.pt/.pth)")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Trained Lightning checkpoint (.ckpt) or state_dict (.pt/.pth) "
+                             "(required unless --embedding is provided)")
     parser.add_argument("--model", type=str, default="tilted",
                         choices=["vae", "tilted"],
                         help="Model architecture matching the checkpoint")
@@ -105,7 +113,79 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_dir", type=str, default="results/well_compound_test",
                         help="Directory to save result plots")
 
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    # Validate: either --embedding or (--checkpoint + --root_dir) must be given
+    if args.embedding is None:
+        if args.checkpoint is None:
+            parser.error("--checkpoint is required when --embedding is not provided")
+        if args.root_dir is None:
+            parser.error("--root_dir is required when --embedding is not provided")
+
+    return args
+
+
+def load_well_means_from_embedding(
+    embedding_path: str,
+    metadata: List[dict],
+    min_wells: int,
+    max_compounds: "int | None",
+    subtract_control: bool = False,
+    normalize_before_subtract: bool = False,
+) -> Tuple[np.ndarray, List[str], List[str]]:
+    """Load pre-computed embeddings from a .pt file and compute well means.
+
+    The .pt file has the structure produced by encode_embeddings.py:
+        { compound_id: { plate_id: { "treated": (N,D), "control": (D,) } } }
+
+    Returns the same format as compute_well_mean_embeddings.
+    """
+    data = torch.load(embedding_path, map_location="cpu", weights_only=False)
+
+    well_embeddings: List[np.ndarray] = []
+    well_compound_labels: List[str] = []
+    well_plate_labels: List[str] = []
+
+    compounds_processed = 0
+    for entry in metadata:
+        compound_id = str(entry["Compound"])
+        if compound_id not in data:
+            continue
+
+        wells_for_compound: List[Tuple[np.ndarray, str]] = []
+        compound_data = data[compound_id]
+
+        for plate_id, plate_data in compound_data.items():
+            treated = plate_data.get("treated", None)
+            if treated is None or treated.numel() == 0:
+                continue
+
+            well_mean = treated.mean(dim=0).numpy()
+
+            if subtract_control:
+                control = plate_data.get("control", None)
+                if control is not None and control.numel() > 0:
+                    ctrl_mean = control.numpy()
+                    if ctrl_mean.ndim > 1:
+                        ctrl_mean = ctrl_mean.mean(axis=0)
+                    if normalize_before_subtract:
+                        well_mean = well_mean / (np.linalg.norm(well_mean) + 1e-8)
+                        ctrl_mean = ctrl_mean / (np.linalg.norm(ctrl_mean) + 1e-8)
+                    well_mean = well_mean - ctrl_mean
+
+            wells_for_compound.append((well_mean, str(plate_id)))
+
+        if len(wells_for_compound) >= min_wells:
+            for emb, plate in wells_for_compound:
+                well_embeddings.append(emb)
+                well_compound_labels.append(compound_id)
+                well_plate_labels.append(plate)
+            compounds_processed += 1
+
+        if max_compounds is not None and compounds_processed >= max_compounds:
+            break
+
+    return np.array(well_embeddings), well_compound_labels, well_plate_labels
 
 
 def build_model(args: argparse.Namespace) -> torch.nn.Module:
@@ -529,35 +609,45 @@ def main() -> None:
     )
     print(f"Device : {device}")
 
-    # ── Build model ──────────────────────────────────────────────────────────
-    model = build_model(args)
-    load_checkpoint(model, args.checkpoint)
-    model.to(device).eval()
-    for param in model.parameters():
-        param.requires_grad = False
-    print(f"Model  : {args.model}  (latent dim {args.latent_dim})")
-
     # ── Load metadata ────────────────────────────────────────────────────────
     with open(args.metadata) as f:
         metadata = json.load(f)
     print(f"Metadata: {len(metadata)} compounds")
 
-    root_dir = Path(args.root_dir)
-    transform = T.Compose([
-        T.Resize((args.img_size, args.img_size), antialias=True),
-        T.ConvertImageDtype(torch.float32),
-    ])
-    mode = ImageReadMode.GRAY if args.in_channels == 1 else ImageReadMode.RGB
-
     # ── Compute mean embeddings per well ─────────────────────────────────────
-    ctrl_msg = " (subtract_control=True)" if args.subtract_control else ""
-    print(f"\nEncoding wells (min_wells={args.min_wells}){ctrl_msg}...")
-    well_embeddings, well_labels, well_plates = compute_well_mean_embeddings(
-        metadata, root_dir, model, transform, mode,
-        args.batch_size, device, args.min_wells, args.max_compounds,
-        subtract_control=args.subtract_control,
-        normalize_before_subtract=args.normalize_before_subtract,
-    )
+    if args.embedding is not None:
+        # Use pre-computed embeddings — skip model loading entirely
+        print(f"\nLoading pre-computed embeddings from {args.embedding}...")
+        well_embeddings, well_labels, well_plates = load_well_means_from_embedding(
+            args.embedding, metadata, args.min_wells, args.max_compounds,
+            subtract_control=args.subtract_control,
+            normalize_before_subtract=args.normalize_before_subtract,
+        )
+        model = None
+    else:
+        # Build and load model, encode from images
+        model = build_model(args)
+        load_checkpoint(model, args.checkpoint)
+        model.to(device).eval()
+        for param in model.parameters():
+            param.requires_grad = False
+        print(f"Model  : {args.model}  (latent dim {args.latent_dim})")
+
+        root_dir = Path(args.root_dir)
+        transform = T.Compose([
+            T.Resize((args.img_size, args.img_size), antialias=True),
+            T.ConvertImageDtype(torch.float32),
+        ])
+        mode = ImageReadMode.GRAY if args.in_channels == 1 else ImageReadMode.RGB
+
+        ctrl_msg = " (subtract_control=True)" if args.subtract_control else ""
+        print(f"\nEncoding wells (min_wells={args.min_wells}){ctrl_msg}...")
+        well_embeddings, well_labels, well_plates = compute_well_mean_embeddings(
+            metadata, root_dir, model, transform, mode,
+            args.batch_size, device, args.min_wells, args.max_compounds,
+            subtract_control=args.subtract_control,
+            normalize_before_subtract=args.normalize_before_subtract,
+        )
 
     n_wells = len(well_labels)
     n_compounds = len(set(well_labels))
@@ -617,7 +707,7 @@ def main() -> None:
     plot_distance_distributions(within_dists, between_dists, args.metric, plot_path)
 
     # ── Radial deviation diagnostic (TiltedVAE) ─────────────────────────────
-    if hasattr(model, "gamma"):
+    if model is not None and hasattr(model, "gamma"):
         plot_radial_deviation(
             well_embeddings, well_labels, model.gamma, args.output_dir,
         )
