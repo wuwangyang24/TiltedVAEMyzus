@@ -97,7 +97,7 @@ def parse_args() -> argparse.Namespace:
                         help="Class label column in the label CSV. Default: synthesis_program")
     parser.add_argument("--cls_subtract_control", action="store_true",
                         help="Subtract per-plate control embedding before classification")
-    parser.add_argument("--cls_filter_by_efficacy", type=float, default=None,
+    parser.add_argument("--cls_filter_by_efficacy", type=float, default=0,
                         help="Keep only compounds with Efficacy >= this value")
     parser.add_argument("--cls_min_compounds_per_class", type=int, default=30,
                         help="Drop classes with fewer compounds. Default: 30")
