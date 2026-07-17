@@ -5,7 +5,7 @@ import torch
 import pytorch_lightning as pl
 import torchvision.utils as vutils
 
-from Models import VAE, TiltedVAE
+from Models import VAE, TiltedVAE, DinoTiltedVAE
 
 
 class VAEExperiment(pl.LightningModule):
@@ -33,7 +33,7 @@ class VAEExperiment(pl.LightningModule):
     """
 
     def __init__(self,
-                 model: Union[VAE, TiltedVAE],
+                 model: Union[VAE, TiltedVAE, DinoTiltedVAE],
                  lr: float = 1e-3,
                  weight_decay: float = 0.0,
                  kld_weight: float = 0.005,
@@ -206,6 +206,10 @@ class VAEExperiment(pl.LightningModule):
 
         recons = self.model.generate(images)
         samples = self.model.sample(self.num_samples, self.device)
+
+        # DinoTiltedVAE outputs embeddings, not images — skip image logging.
+        if isinstance(self.model, DinoTiltedVAE):
+            return
 
         recon_grid = vutils.make_grid(recons, nrow=4, normalize=True, value_range=(0, 1))
         input_grid = vutils.make_grid(images, nrow=4, normalize=True, value_range=(0, 1))
