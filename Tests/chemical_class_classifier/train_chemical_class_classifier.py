@@ -147,6 +147,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--val_split", type=float, default=0.2,
                    help="Fraction of compounds used for validation (only with --use_val_set). Default: 0.2")
 
+    # ---- Confidence intervals ----
+    p.add_argument("--confidence_interval", action="store_true",
+                   help="Compute bootstrap confidence intervals for test metrics")
+    p.add_argument("--ci_n_bootstraps", type=int, default=1000,
+                   help="Number of bootstrap resamples for CI estimation. Default: 1000")
+    p.add_argument("--ci_level", type=float, default=0.95,
+                   help="Confidence level (e.g. 0.95 for 95%% CI). Default: 0.95")
+
     # ---- Misc ----
     p.add_argument("--output_dir", default="Tests/chemical_class_classifier/runs",
                    help="Directory for checkpoints and logs. "
@@ -160,6 +168,80 @@ def parse_args() -> argparse.Namespace:
                    help="Top-k values for classification accuracy. Default: 1 3 5")
 
     return p.parse_args()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Bootstrap confidence intervals
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _compute_bootstrap_ci(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_probs: np.ndarray,
+    num_classes: int,
+    n_bootstraps: int,
+    ci_level: float,
+    topk: tuple,
+    output_dir: Path,
+    file_suffix: str,
+    seed: int = 42,
+) -> None:
+    """Compute bootstrap confidence intervals for classification metrics."""
+    from sklearn.metrics import balanced_accuracy_score, f1_score, top_k_accuracy_score
+
+    rng = np.random.default_rng(seed)
+    n = len(y_true)
+    alpha = 1.0 - ci_level
+
+    # Metrics to bootstrap
+    bal_accs, weighted_f1s, top1_accs = [], [], []
+    topk_accs = {k: [] for k in sorted(set(topk)) if k > 1 and k <= num_classes}
+
+    for _ in range(n_bootstraps):
+        idx = rng.choice(n, size=n, replace=True)
+        bt_true = y_true[idx]
+        bt_pred = y_pred[idx]
+        bt_probs = y_probs[idx]
+
+        bal_accs.append(balanced_accuracy_score(bt_true, bt_pred))
+        weighted_f1s.append(f1_score(bt_true, bt_pred, average="weighted", zero_division=0))
+        top1_accs.append(float((bt_pred == bt_true).mean()))
+
+        for k in topk_accs:
+            topk_accs[k].append(top_k_accuracy_score(
+                bt_true, bt_probs, k=k, labels=list(range(num_classes)),
+            ))
+
+    def _ci(values):
+        lo = np.percentile(values, 100 * alpha / 2)
+        hi = np.percentile(values, 100 * (1 - alpha / 2))
+        return float(np.mean(values)), float(lo), float(hi)
+
+    ci_bal_acc = _ci(bal_accs)
+    ci_f1 = _ci(weighted_f1s)
+    ci_top1 = _ci(top1_accs)
+
+    pct = int(ci_level * 100)
+    print(f"\n-- Bootstrap {pct}% Confidence Intervals ({n_bootstraps} resamples) --")
+    print(f"  Balanced accuracy : {ci_bal_acc[0]:.4f}  [{ci_bal_acc[1]:.4f}, {ci_bal_acc[2]:.4f}]")
+    print(f"  Weighted F1       : {ci_f1[0]:.4f}  [{ci_f1[1]:.4f}, {ci_f1[2]:.4f}]")
+    print(f"  Top-1 accuracy    : {ci_top1[0]:.4f}  [{ci_top1[1]:.4f}, {ci_top1[2]:.4f}]")
+    for k in sorted(topk_accs):
+        ci_k = _ci(topk_accs[k])
+        print(f"  Top-{k} accuracy    : {ci_k[0]:.4f}  [{ci_k[1]:.4f}, {ci_k[2]:.4f}]")
+
+    # Save to file
+    ci_path = output_dir / f"confidence_intervals{file_suffix}.txt"
+    with open(ci_path, "w", encoding="utf-8") as f:
+        f.write(f"Bootstrap {pct}% Confidence Intervals ({n_bootstraps} resamples)\n")
+        f.write(f"{'='*60}\n\n")
+        f.write(f"Balanced accuracy : {ci_bal_acc[0]:.4f}  [{ci_bal_acc[1]:.4f}, {ci_bal_acc[2]:.4f}]\n")
+        f.write(f"Weighted F1       : {ci_f1[0]:.4f}  [{ci_f1[1]:.4f}, {ci_f1[2]:.4f}]\n")
+        f.write(f"Top-1 accuracy    : {ci_top1[0]:.4f}  [{ci_top1[1]:.4f}, {ci_top1[2]:.4f}]\n")
+        for k in sorted(topk_accs):
+            ci_k = _ci(topk_accs[k])
+            f.write(f"Top-{k} accuracy    : {ci_k[0]:.4f}  [{ci_k[1]:.4f}, {ci_k[2]:.4f}]\n")
+    print(f"  CI saved to       : {ci_path}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -289,6 +371,21 @@ def _run_catboost(
     # ── Evaluation on held-out test set ───────────────────────────────────────
     test_preds = clf.predict(X_test).astype(int).ravel()
     test_probs = clf.predict_proba(X_test)
+
+    # ── Bootstrap confidence intervals ────────────────────────────────────────
+    if args.confidence_interval:
+        _compute_bootstrap_ci(
+            y_true=y_test,
+            y_pred=test_preds,
+            y_probs=test_probs,
+            num_classes=num_classes,
+            n_bootstraps=args.ci_n_bootstraps,
+            ci_level=args.ci_level,
+            topk=tuple(args.topk),
+            output_dir=output_dir,
+            file_suffix=f"_{Path(args.embeddings).stem}",
+            seed=args.seed,
+        )
 
     emb_stem = Path(args.embeddings).stem
 
