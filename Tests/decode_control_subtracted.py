@@ -334,37 +334,51 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Decode and save per-compound
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
     for compound_id, data in compound_data.items():
         subtracted = data["subtracted"]  # (N, D)
         treated = data["treated"]        # (N, D)
         control = data["control"]        # (D,)
 
-        print(f"  Compound {compound_id}: {subtracted.shape[0]} images")
+        print(f"  Compound {compound_id}: {treated.shape[0]} images")
 
-        # Decode control-subtracted embeddings (the pure compound effect)
+        # Decode treated embeddings in image space
+        decoded_treated = decode_latents(treated, model, device, args.batch_size)
+        decoded_treated = decoded_treated.clamp(0, 1)
+
+        # Decode control embedding in image space
+        decoded_control = decode_latents(control.unsqueeze(0), model, device)
+        decoded_control = decoded_control.clamp(0, 1)  # (1, C, H, W)
+
+        # Subtract reconstructed control image from each reconstructed treated image
+        # in pixel space: (N, C, H, W) - (1, C, H, W)
+        pixel_diff = decoded_treated - decoded_control
+
+        # Save the latent-space subtracted grid (existing behavior)
         decoded_subtracted = decode_latents(subtracted, model, device, args.batch_size)
-        # Clamp to [0, 1] for visualization (decoder uses Sigmoid but subtracted
-        # latents may produce values slightly outside the natural range)
         decoded_subtracted = decoded_subtracted.clamp(0, 1)
         grid = make_grid(decoded_subtracted, nrow=args.nrow, padding=2)
         save_image(grid, out_dir / f"compound_{compound_id}_subtracted.png")
 
-        # ── Mean heatmap: average pixel intensity across all reconstructed images ──
-        # decoded_subtracted shape: (N, C, H, W) → mean over N → (C, H, W)
-        mean_img = decoded_subtracted.mean(dim=0)  # (C, H, W)
+        # ── Mean heatmap: average pixel-space difference across all images ──
+        # pixel_diff shape: (N, C, H, W) → mean over N → (C, H, W)
+        mean_diff = pixel_diff.mean(dim=0)  # (C, H, W)
         # Convert to single-channel by averaging across color channels
-        if mean_img.shape[0] == 3:
-            mean_gray = mean_img.mean(dim=0).numpy()  # (H, W)
+        if mean_diff.shape[0] == 3:
+            mean_gray = mean_diff.mean(dim=0).numpy()  # (H, W)
         else:
-            mean_gray = mean_img.squeeze(0).numpy()   # (H, W)
-
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+            mean_gray = mean_diff.squeeze(0).numpy()   # (H, W)
 
         fig, ax = plt.subplots(figsize=(6, 5))
-        im = ax.imshow(mean_gray, cmap="hot", interpolation="nearest")
-        ax.set_title(f"Compound {compound_id}\nMean pixel intensity (N={subtracted.shape[0]} images)")
+        # Use diverging colormap: blue = control brighter, red = treated brighter
+        vmax = max(abs(mean_gray.min()), abs(mean_gray.max()))
+        im = ax.imshow(mean_gray, cmap="RdBu_r", interpolation="nearest",
+                       vmin=-vmax, vmax=vmax)
+        ax.set_title(f"Compound {compound_id}\n"
+                     f"Mean pixel diff: treated − control (N={treated.shape[0]})")
         ax.axis("off")
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         fig.tight_layout()
@@ -373,16 +387,10 @@ def main() -> None:
         plt.close(fig)
         print(f"    Saved heatmap to {heatmap_path}")
 
-        # Optionally also decode the raw treated embeddings for side-by-side comparison
+        # Save treated and control decoded images
         if args.also_decode_treated:
-            decoded_treated = decode_latents(treated, model, device, args.batch_size)
-            decoded_treated = decoded_treated.clamp(0, 1)
             grid_treated = make_grid(decoded_treated, nrow=args.nrow, padding=2)
             save_image(grid_treated, out_dir / f"compound_{compound_id}_treated.png")
-
-            # Decode the control mean too (single image)
-            decoded_control = decode_latents(control.unsqueeze(0), model, device)
-            decoded_control = decoded_control.clamp(0, 1)
             save_image(decoded_control.squeeze(0), out_dir / f"compound_{compound_id}_control.png")
 
     # Optionally save all subtracted embeddings for downstream analysis
