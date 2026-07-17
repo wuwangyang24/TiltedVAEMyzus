@@ -26,7 +26,7 @@ All tests reuse the exact functions from ``permutation_test_size.py``,
 behaviour is unchanged; only the image group is shared.
 
 Examples:
-    python Tests/select_test.py --data_dir ../DATA/Train/ --checkpoint results/checkpoints/last.ckpt --model vae --pool 500 --method pca --device cpu
+python TiltedVAEMyzus/Tests/select_test.py --embedding TiltedVAEMyzus/results/checkpoints/tilted-latent128_kl0.001_bestsofar/embeddings_best_balanced_acc.pt --model tilted --pool 500 --method pca --device cpu --subtract_control --normalize_before_subtract
 """
 import argparse
 import importlib.util
