@@ -24,7 +24,7 @@ Workflow
 Usage
 -----
   # XGBoost (default)
-python TiltedVAEMyzus/Tests/efficacy500_classifier/train_efficacy_classifier.py --classifier xgboost --embeddings Tests/efficacy500_classifier/embeddings_20ppm.pt --efficacy Tests/efficacy500_classifier/efficacy.pt --inference_embeddings Tests/efficacy500_classifier/embeddings_100ppm.pt --inference_efficacy Tests/efficacy500_classifier/efficacy_500ppm.csv
+python TiltedVAEMyzus/Tests/efficacy500_classifier/train_efficacy_classifier.py --classifier xgboost --embeddings TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_20ppm.pt --efficacy TiltedVAEMyzus/Tests/efficacy500_classifier/efficacy.pt --inference_embeddings TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_100ppm.pt --inference_efficacy TiltedVAEMyzus/Tests/efficacy500_classifier/compounds500ppm.csv
 
   # CatBoost
   python Tests/efficacy500_classifier/train_efficacy_classifier.py \\
