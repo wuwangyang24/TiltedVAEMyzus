@@ -35,7 +35,6 @@ import sys
 from types import ModuleType
 from typing import List
 
-import json
 import numpy as np
 import torch
 
@@ -79,10 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--embedding", type=str, default=None,
                         help="Path to a pre-computed embedding .pt file from "
                              "encode_embeddings.py. When provided, skips model "
-                             "loading and image encoding; requires --metadata.")
-    parser.add_argument("--metadata", type=str, default=None,
-                        help="JSON metadata file mapping compounds -> plates -> paths "
-                             "(required when --embedding is provided)")
+                             "loading and image encoding.")
     parser.add_argument("--model", type=str, default="vae",
                         choices=["vae", "tilted"],
                         help="Model architecture matching the checkpoint")
@@ -145,8 +141,7 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
 
     if args.embedding is not None:
-        if args.metadata is None:
-            parser.error("--metadata is required when --embedding is provided")
+        pass  # no extra requirements
     else:
         if args.data_dir is None:
             parser.error("--data_dir is required when --embedding is not provided")
@@ -229,7 +224,6 @@ def select_matched_paths(data_dir: str, in_channels: int, black_threshold: int,
 
 def load_latents_from_embedding(
     embedding_path: str,
-    metadata_path: str,
     subtract_control: bool = False,
     normalize_before_subtract: bool = False,
 ) -> np.ndarray:
@@ -240,15 +234,8 @@ def load_latents_from_embedding(
     """
     data = torch.load(embedding_path, map_location="cpu", weights_only=False)
 
-    with open(metadata_path) as f:
-        metadata = json.load(f)
-
     all_latents: List[np.ndarray] = []
-    for entry in metadata:
-        compound_id = str(entry["Compound"])
-        if compound_id not in data:
-            continue
-        compound_data = data[compound_id]
+    for compound_id, compound_data in data.items():
         for plate_id, plate_data in compound_data.items():
             treated = plate_data.get("treated", None)
             if treated is None or treated.numel() == 0:
@@ -268,8 +255,7 @@ def load_latents_from_embedding(
 
     if not all_latents:
         raise RuntimeError(
-            "No treated embeddings found. Check that compound IDs in the "
-            "embeddings file match those in the metadata."
+            "No treated embeddings found in the .pt file."
         )
     return np.concatenate(all_latents, axis=0)
 
@@ -338,7 +324,7 @@ def main() -> None:
         # ── Pre-computed embeddings mode ─────────────────────────────────────
         print(f"Loading pre-computed embeddings from {args.embedding}...")
         latents = load_latents_from_embedding(
-            args.embedding, args.metadata,
+            args.embedding,
             subtract_control=args.subtract_control,
             normalize_before_subtract=args.normalize_before_subtract,
         )
