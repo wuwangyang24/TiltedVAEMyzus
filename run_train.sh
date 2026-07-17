@@ -87,5 +87,5 @@ python "${SCRIPT_DIR}/train.py" \
     --cls_every_n_epochs  "${CLS_EVERY_N_EPOCHS}" \
     --cls_label_col       "${CLS_LABEL_COL}" \
     --cls_compound_col    "${CLS_COMPOUND_COL}" \
-    --subtract_control \
-    --normalize_before_subtract
+    --cls_subtract_control \
+    --cls_normalize_before_subtract
