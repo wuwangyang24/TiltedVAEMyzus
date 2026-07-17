@@ -280,34 +280,7 @@ def _run_xgboost(
                 f.write(f"{k}: {v}\n")
         print(f"  Saved best params to {params_path}")
 
-    # ── 5-Fold Cross Validation ──────────────────────────────────────────
-    print("\n5-Fold Cross Validation on training data ...")
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=args.seed)
-    fold_aurocs = []
-
-    for seed in range(5):
-        for fold_idx, (tr_idx, va_idx) in enumerate(skf.split(X_train, y_train), 1):
-            X_tr, X_va = X_train[tr_idx], X_train[va_idx]
-            y_tr, y_va = y_train[tr_idx], y_train[va_idx]
-
-            fold_clf = xgb.XGBClassifier(
-                **xgb_params,
-                objective="binary:logistic",
-                eval_metric="auc",
-                use_label_encoder=False,
-                random_state=seed+fold_idx,
-                device=args.device if torch.cuda.is_available() or not args.device.startswith("cuda") else "cpu",
-                early_stopping_rounds=args.xgb_early_stopping,
-            )
-            fold_clf.fit(X_tr, y_tr, eval_set=[(X_va, y_va)], verbose=False)
-
-            va_proba = fold_clf.predict_proba(X_va)[:, 1]
-            fold_aurocs.append(roc_auc_score(y_va, va_proba))
-            print(f" Seed {seed} Fold {fold_idx}: AUROC={fold_aurocs[-1]:.4f}")
-
-    print(f"  Mean : AUROC={np.mean(fold_aurocs):.4f} +/- {np.std(fold_aurocs):.4f}")
-
-    # ── Train final model on all training data ───────────────────────────
+    # ── Train on all training data and evaluate on test set ────────────
     clf = xgb.XGBClassifier(
         **xgb_params,
         objective="binary:logistic",
@@ -317,8 +290,8 @@ def _run_xgboost(
         device=args.device if torch.cuda.is_available() or not args.device.startswith("cuda") else "cpu",
         early_stopping_rounds=args.xgb_early_stopping,
     )
-    print(f"\nTraining final XGBoost on all {X_train.shape[0]} training compounds ...")
-    clf.fit(X_train, y_train, eval_set=[(X_inf, y_inf)], verbose=None)
+    print(f"\nTraining XGBoost on all {X_train.shape[0]} training compounds ...")
+    clf.fit(X_train, y_train, eval_set=[(X_inf, y_inf)], verbose=False)
     print("Training done.\n")
 
     inf_preds = clf.predict(X_inf)
