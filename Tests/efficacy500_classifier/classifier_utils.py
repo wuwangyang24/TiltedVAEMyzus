@@ -61,7 +61,11 @@ def binarize_efficacy(
 def load_inference_labels(csv_path: str) -> Dict[str, int]:
     """Load inference CSV with 'Compound No' and 'Active' columns."""
     df = pd.read_csv(csv_path)
-    return {str(row["Compound No"]): int(row["Active"]) for _, row in df.iterrows()}
+    # Ensure compound IDs are clean integers-as-strings (no trailing ".0")
+    df["Compound No"] = df["Compound No"].apply(
+        lambda x: str(int(x)) if pd.notna(x) and float(x) == int(float(x)) else str(x)
+    )
+    return {row["Compound No"]: int(row["Active"]) for _, row in df.iterrows()}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
