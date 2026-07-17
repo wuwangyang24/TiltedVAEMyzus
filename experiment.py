@@ -196,6 +196,10 @@ class VAEExperiment(pl.LightningModule):
         if not hasattr(self.logger, "experiment"):
             return
 
+        # DinoTiltedVAE outputs embeddings, not images — skip image logging.
+        if isinstance(self.model, DinoTiltedVAE):
+            return
+
         # Fetch a fixed batch once and reuse it, so we don't rebuild the val
         # DataLoader (and re-spawn workers) on every validation epoch.
         if self._log_images_batch is None:
@@ -206,10 +210,6 @@ class VAEExperiment(pl.LightningModule):
 
         recons = self.model.generate(images)
         samples = self.model.sample(self.num_samples, self.device)
-
-        # DinoTiltedVAE outputs embeddings, not images — skip image logging.
-        if isinstance(self.model, DinoTiltedVAE):
-            return
 
         recon_grid = vutils.make_grid(recons, nrow=4, normalize=True, value_range=(0, 1))
         input_grid = vutils.make_grid(images, nrow=4, normalize=True, value_range=(0, 1))
