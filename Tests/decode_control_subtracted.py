@@ -16,13 +16,8 @@ Output: a grid of decoded images saved as PNG, plus optionally the raw
 difference embeddings (.pt) for downstream analysis.
 
 Usage:
-    # From pre-encoded embeddings
-    python Tests/decode_control_subtracted.py \
-        --embeddings Tests/chemical_class_classifier/embeddings.pt \
-        --checkpoint results/checkpoints/last.ckpt \
-        --model tilted --latent_dim 128 --img_size 96 \
-        --compounds 1 2 3 --max_images_per_compound 8 \
-        --output_dir results/control_subtracted/
+# From pre-encoded embeddings
+python TiltedVAEMyzus/Tests/decode_control_subtracted.py --embeddings TiltedVAEMyzus/results/checkpoints/tilted-latent128_kl0.001_bestsofar/embeddings_best_balanced_acc.pt --checkpoint TiltedVAEMyzus/results/checkpoints/tilted-latent128_kl0.001_bestsofar/best_balanced_acc.ckpt --model tilted --latent_dim 128 --img_size 96 --compounds BCS-AO37552 --max_images_per_compound 8 --output_dir results/control_subtracted/ --device cpu
 
     # From raw images (encodes on the fly)
     python Tests/decode_control_subtracted.py \
