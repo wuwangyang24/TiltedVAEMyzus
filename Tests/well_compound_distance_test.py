@@ -170,15 +170,6 @@ def encode_paths(
     return torch.cat(latents, dim=0) if latents else torch.empty(0)
 
 
-def compute_pairwise_distances(
-    embeddings: np.ndarray, metric: str = "euclidean"
-) -> np.ndarray:
-    """Compute pairwise distances between rows of an (N, D) array.
-    Returns the upper-triangle distances as a 1D array."""
-    from scipy.spatial.distance import pdist
-    return pdist(embeddings, metric=metric)
-
-
 def compute_well_mean_embeddings(
     metadata: List[dict],
     root_dir: Path,
@@ -188,7 +179,7 @@ def compute_well_mean_embeddings(
     batch_size: int,
     device: torch.device,
     min_wells: int,
-    max_compounds: int | None,
+    max_compounds: "int | None",
     subtract_control: bool = False,
 ) -> Tuple[np.ndarray, List[str], List[str]]:
     """Compute mean embedding per well for each compound.
@@ -359,7 +350,7 @@ def plot_dimension_reduction(
 
     # t-SNE
     from sklearn.manifold import TSNE
-    perplexity = min(30, max(5, len(well_embeddings) - 1))
+    perplexity = min(30, max(2, len(well_embeddings) - 1))
     tsne = TSNE(n_components=2, perplexity=perplexity, random_state=seed,
                 init="pca", learning_rate="auto")
     methods["tSNE"] = tsne.fit_transform(well_embeddings)
