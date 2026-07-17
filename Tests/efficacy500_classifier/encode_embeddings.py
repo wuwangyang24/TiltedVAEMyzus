@@ -34,7 +34,7 @@ Output .pt file structure (dict):
     }
 
 Usage:
-python TiltedVAEMyzus/Tests/efficacy500_classifier/encode_embeddings.py --metadata METADATA/metadata_compound_all20ppm.json --root_dir DATA_TRAIN/ --output TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_20ppm.pt --checkpoint TiltedVAEMyzus/results/checkpoints/tilted-latent128_kl0.001/best_balanced_acc.ckpt --model tilted --latent_dim 128 --img_size 96 --device cpu
+python TiltedVAEMyzus/Tests/efficacy500_classifier/encode_embeddings.py --metadata METADATA/metadata_compound_all20ppm.json --root_dir DATA_TEST/ --output TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_20ppm.pt --checkpoint TiltedVAEMyzus/results/checkpoints/tilted-latent128_kl0.001_bestsofar/best_balanced_acc.ckpt --model tilted --latent_dim 128 --img_size 96 --device cpu
 """
 
 import argparse
