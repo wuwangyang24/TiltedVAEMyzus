@@ -354,6 +354,28 @@ def main() -> None:
         grid = make_grid(decoded_subtracted, nrow=args.nrow, padding=2)
         save_image(grid, out_dir / f"compound_{compound_id}_subtracted.png")
 
+        # ── Mean heatmap: average pixel intensity across all reconstructed images ──
+        # decoded_subtracted shape: (N, C, H, W) → mean over N → (C, H, W)
+        mean_img = decoded_subtracted.mean(dim=0)  # (C, H, W)
+        # Convert to single-channel by averaging across color channels
+        if mean_img.shape[0] == 3:
+            mean_gray = mean_img.mean(dim=0).numpy()  # (H, W)
+        else:
+            mean_gray = mean_img.squeeze(0).numpy()   # (H, W)
+
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(6, 5))
+        im = ax.imshow(mean_gray, cmap="hot", interpolation="nearest")
+        ax.set_title(f"Compound {compound_id}\nMean pixel intensity (N={subtracted.shape[0]} images)")
+        ax.axis("off")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        fig.tight_layout()
+        fig.savefig(out_dir / f"compound_{compound_id}_heatmap.png", dpi=150)
+        plt.close(fig)
+
         # Optionally also decode the raw treated embeddings for side-by-side comparison
         if args.also_decode_treated:
             decoded_treated = decode_latents(treated, model, device, args.batch_size)
