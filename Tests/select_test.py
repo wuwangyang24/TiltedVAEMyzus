@@ -35,6 +35,7 @@ import sys
 from types import ModuleType
 from typing import List
 
+import json
 import numpy as np
 import torch
 
@@ -69,11 +70,19 @@ def parse_args() -> argparse.Namespace:
                     "permutation tests on it")
 
     # Data / model
-    parser.add_argument("--data_dir", type=str, required=True,
-                        help="Path to the image dataset (any nested folder layout)")
-    parser.add_argument("--checkpoint", type=str, required=True,
+    parser.add_argument("--data_dir", type=str, default=None,
+                        help="Path to the image dataset (required unless --embedding is provided)")
+    parser.add_argument("--checkpoint", type=str, default=None,
                         help="Path to a trained Lightning checkpoint (.ckpt) or a "
-                             "raw model state_dict (.pt/.pth)")
+                             "raw model state_dict (.pt/.pth) "
+                             "(required unless --embedding is provided)")
+    parser.add_argument("--embedding", type=str, default=None,
+                        help="Path to a pre-computed embedding .pt file from "
+                             "encode_embeddings.py. When provided, skips model "
+                             "loading and image encoding; requires --metadata.")
+    parser.add_argument("--metadata", type=str, default=None,
+                        help="JSON metadata file mapping compounds -> plates -> paths "
+                             "(required when --embedding is provided)")
     parser.add_argument("--model", type=str, default="vae",
                         choices=["vae", "tilted"],
                         help="Model architecture matching the checkpoint")
@@ -126,8 +135,25 @@ def parse_args() -> argparse.Namespace:
                              "darker/stretched_length/stretched_width) so the "
                              "'original' points land at identical coordinates in "
                              "all plots")
+    parser.add_argument("--subtract_control", action="store_true",
+                        help="Subtract per-plate averaged control embedding from "
+                             "treated embeddings (only used with --embedding)")
+    parser.add_argument("--normalize_before_subtract", action="store_true",
+                        help="L2-normalize treated and control embeddings before "
+                             "subtraction (only used with --subtract_control)")
 
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    if args.embedding is not None:
+        if args.metadata is None:
+            parser.error("--metadata is required when --embedding is provided")
+    else:
+        if args.data_dir is None:
+            parser.error("--data_dir is required when --embedding is not provided")
+        if args.checkpoint is None:
+            parser.error("--checkpoint is required when --embedding is not provided")
+
+    return args
 
 
 def select_matched_paths(data_dir: str, in_channels: int, black_threshold: int,
@@ -201,6 +227,53 @@ def select_matched_paths(data_dir: str, in_channels: int, black_threshold: int,
     return selected
 
 
+def load_latents_from_embedding(
+    embedding_path: str,
+    metadata_path: str,
+    subtract_control: bool = False,
+    normalize_before_subtract: bool = False,
+) -> np.ndarray:
+    """Load per-image treated latents from a pre-computed .pt embedding file.
+
+    Returns a (N, D) array of all treated latent vectors across all compounds
+    and plates, optionally with plate-level control subtraction.
+    """
+    data = torch.load(embedding_path, map_location="cpu", weights_only=False)
+
+    with open(metadata_path) as f:
+        metadata = json.load(f)
+
+    all_latents: List[np.ndarray] = []
+    for entry in metadata:
+        compound_id = str(entry["Compound"])
+        if compound_id not in data:
+            continue
+        compound_data = data[compound_id]
+        for plate_id, plate_data in compound_data.items():
+            treated = plate_data.get("treated", None)
+            if treated is None or treated.numel() == 0:
+                continue
+            treated = treated.float()
+            if subtract_control:
+                control = plate_data.get("control", None)
+                if control is not None and control.numel() > 0:
+                    control = control.float()
+                    if normalize_before_subtract:
+                        treated = treated / (treated.norm(dim=-1, keepdim=True) + 1e-8)
+                        control = control / (control.norm(dim=-1, keepdim=True) + 1e-8)
+                    if control.ndim == 1:
+                        control = control.unsqueeze(0)
+                    treated = treated - control
+            all_latents.append(treated.numpy())
+
+    if not all_latents:
+        raise RuntimeError(
+            "No treated embeddings found. Check that compound IDs in the "
+            "embeddings file match those in the metadata."
+        )
+    return np.concatenate(all_latents, axis=0)
+
+
 def encode_groups(test_module: ModuleType, model: torch.nn.Module,
                   paths: List[str], group_names: List[str], transforms: dict,
                   args: argparse.Namespace, device: torch.device,
@@ -261,6 +334,45 @@ def main() -> None:
 
     os.makedirs(args.output_dir, exist_ok=True)
 
+    if args.embedding is not None:
+        # ── Pre-computed embeddings mode ─────────────────────────────────────
+        print(f"Loading pre-computed embeddings from {args.embedding}...")
+        latents = load_latents_from_embedding(
+            args.embedding, args.metadata,
+            subtract_control=args.subtract_control,
+            normalize_before_subtract=args.normalize_before_subtract,
+        )
+        print(f"Loaded {latents.shape[0]} latent vectors (dim={latents.shape[1]})")
+
+        # Save latents
+        npz_path = os.path.join(args.output_dir, "latents_embedding.npz")
+        np.savez(npz_path, latents=latents)
+        print(f"Saved latents to {npz_path}")
+
+        # Dimensionality reduction and plot
+        print(f"\nReducing to 2D with {args.method}...")
+        coords = size_test.reduce_dims(latents, args.method, args.seed)
+
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(9, 7))
+        ax.scatter(coords[:, 0], coords[:, 1], s=15, alpha=0.6, edgecolors="k",
+                   linewidths=0.2)
+        ax.set_xlabel(f"{args.method.upper()} 1")
+        ax.set_ylabel(f"{args.method.upper()} 2")
+        ctrl_msg = " (control-subtracted)" if args.subtract_control else ""
+        ax.set_title(f"Pre-computed embeddings{ctrl_msg}\n"
+                     f"({latents.shape[0]} images, dim={latents.shape[1]})")
+        fig.tight_layout()
+        plot_path = os.path.join(args.output_dir, f"embeddings_{args.method}.png")
+        fig.savefig(plot_path, dpi=150)
+        plt.close(fig)
+        print(f"Plot saved to {plot_path}")
+        print("\n[done] Embedding visualization complete.")
+        return
+
+    # ── Standard mode: encode from images ────────────────────────────────────
     # Model + weights (built/loaded once and shared by both tests).
     model = size_test.build_model(args)
     size_test.load_checkpoint(model, args.checkpoint)
