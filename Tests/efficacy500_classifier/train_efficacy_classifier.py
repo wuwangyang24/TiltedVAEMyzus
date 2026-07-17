@@ -13,10 +13,40 @@ Workflow
 
 Usage
 -----
+<<<<<<< HEAD
   python Tests/efficacy500_classifier/train_efficacy_classifier.py \
       --embeddings           Tests/efficacy500_classifier/embeddings_20ppm.pt \
       --efficacy             Tests/efficacy500_classifier/efficacy.pt \
       --inference_embeddings Tests/efficacy500_classifier/embeddings_100ppm.pt \
+=======
+  # XGBoost (default)
+python TiltedVAEMyzus/Tests/efficacy500_classifier/train_efficacy_classifier.py --classifier xgboost --embeddings TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_20ppm.pt --efficacy TiltedVAEMyzus/Tests/efficacy500_classifier/efficacy.pt --inference_embeddings TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_100ppm.pt --inference_efficacy TiltedVAEMyzus/Tests/efficacy500_classifier/compounds500ppm.csv
+
+  # CatBoost
+  python Tests/efficacy500_classifier/train_efficacy_classifier.py \\
+      --classifier catboost \\
+      --embeddings           Tests/efficacy500_classifier/embeddings_20ppm.pt \\
+      --efficacy             Tests/efficacy500_classifier/efficacy.pt \\
+      --inference_embeddings Tests/efficacy500_classifier/embeddings_100ppm.pt \\
+      --inference_efficacy   Tests/efficacy500_classifier/efficacy_500ppm.csv
+
+  # Gated ABMIL
+  python Tests/efficacy500_classifier/train_efficacy_classifier.py \\
+      --classifier abmil \\
+      --embeddings           Tests/efficacy500_classifier/embeddings_20ppm.pt \\
+      --efficacy             Tests/efficacy500_classifier/efficacy.pt \\
+      --inference_embeddings Tests/efficacy500_classifier/embeddings_100ppm.pt \\
+      --inference_efficacy   Tests/efficacy500_classifier/efficacy_500ppm.csv
+
+  # Gated ABMIL with hyperparameter tuning
+  python Tests/efficacy500_classifier/train_efficacy_classifier.py \\
+      --classifier abmil --tune \\
+      --abmil_tune_iter 50 \\
+      --abmil_tune_epochs 50 \\
+      --embeddings           Tests/efficacy500_classifier/embeddings_20ppm.pt \\
+      --efficacy             Tests/efficacy500_classifier/efficacy.pt \\
+      --inference_embeddings Tests/efficacy500_classifier/embeddings_100ppm.pt \\
+>>>>>>> d7308ad027d62cbabe8a43cbb955a7c2cd512553
       --inference_efficacy   Tests/efficacy500_classifier/efficacy_500ppm.csv
 
 Output
