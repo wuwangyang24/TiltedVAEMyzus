@@ -624,7 +624,7 @@ def evaluate_and_report(
     # Save report
     report_path = output_dir / "classification_report.txt"
     with open(report_path, "w") as f:
-        f.write(f"Classifier           : {args.classifier}\n")
+        f.write(f"Classifier           : XGBoost\n")
         f.write(f"Model                : {args.model_name}\n")
         f.write(f"Train embeddings     : {args.embeddings}\n")
         f.write(f"Train efficacy       : {args.efficacy}\n")
