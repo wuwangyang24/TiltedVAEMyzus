@@ -54,8 +54,9 @@ class VAE(nn.Module):
             enc_in = h_dim
 
         self.encoder = nn.Sequential(*modules)
+        # Only predict the mean; use fixed unit variance (log_var = 0) to
+        # match the TiltedVAE parameter count.
         self.fc_mu = nn.Linear(self.flatten_dim, latent_dim)
-        self.fc_var = nn.Linear(self.flatten_dim, latent_dim)
 
         # Build Decoder
         modules = []
@@ -102,10 +103,8 @@ class VAE(nn.Module):
         result = self.encoder(input)
         result = torch.flatten(result, start_dim=1)
 
-        # Split the result into mu and var components
-        # of the latent Gaussian distribution
         mu = self.fc_mu(result)
-        log_var = self.fc_var(result)
+        log_var = torch.zeros_like(mu)
 
         return [mu, log_var]
 
