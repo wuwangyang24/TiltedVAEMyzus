@@ -189,7 +189,7 @@ def main() -> None:
 
     # Callbacks
     ckpt_dir = os.path.join(
-        args.output_dir, "checkpoints", f"{args.model}-latent{args.latent_dim}"
+        args.output_dir, "checkpoints", f"{args.model}-latent{args.latent_dim}-kld{args.kld_weight}"
     )
     checkpoint_callback = ModelCheckpoint(
         dirpath=ckpt_dir,
@@ -222,7 +222,7 @@ def main() -> None:
             cb_iterations=args.cls_cb_iterations,
             seed=args.seed,
             output_dir=args.output_dir,
-            ckpt_subdir=f"{args.model}-latent{args.latent_dim}",
+            ckpt_subdir=f"{args.model}-latent{args.latent_dim}-kld{args.kld_weight}",
         )
         callbacks.append(cls_callback)
         print(f"[ClassifierCallback] Enabled — evaluating every {args.cls_every_n_epochs} epochs")
