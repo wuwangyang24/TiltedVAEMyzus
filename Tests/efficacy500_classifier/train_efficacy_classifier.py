@@ -340,6 +340,17 @@ def main() -> None:
     inf_cid2label = load_inference_labels(args.inference_efficacy)
     print(f"  {len(inf_cid2label)} compounds in inference efficacy file.")
 
+    # ── Diagnostic: show ID overlap ──────────────────────────────────────
+    emb_keys = set(str(k) for k in inf_embeddings.keys())
+    csv_keys = set(inf_cid2label.keys())
+    overlap = emb_keys & csv_keys
+    print(f"  ID overlap: {len(overlap)} / {len(csv_keys)} CSV compounds found in embeddings")
+    if len(overlap) < len(csv_keys):
+        missing = list(csv_keys - emb_keys)[:5]
+        emb_sample = list(emb_keys)[:5]
+        print(f"  Sample embedding keys : {emb_sample}")
+        print(f"  Sample CSV keys not in embeddings: {missing}")
+
     # ── Run XGBoost classifier ───────────────────────────────────────────
     inf_preds, inf_proba, y_inf, cids_inf, classifier_label = _run_xgboost(
         embeddings, cid2label, inf_embeddings, inf_cid2label, args,
