@@ -597,6 +597,35 @@ def infer_logsumexp(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+def _bootstrap_ci(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_proba: np.ndarray,
+    n_bootstraps: int = 1000,
+    alpha: float = 0.05,
+    seed: int = 42,
+) -> Dict[str, Tuple[float, float]]:
+    """Compute bootstrap confidence intervals for AUROC, F1, and balanced accuracy."""
+    rng = np.random.RandomState(seed)
+    aurocs, f1s, accs = [], [], []
+    n = len(y_true)
+    for _ in range(n_bootstraps):
+        idx = rng.choice(n, size=n, replace=True)
+        yt, yp, ypr = y_true[idx], y_pred[idx], y_proba[idx]
+        if len(np.unique(yt)) < 2:
+            continue
+        aurocs.append(roc_auc_score(yt, ypr))
+        f1s.append(f1_score(yt, yp, average="weighted", zero_division=0))
+        accs.append(balanced_accuracy_score(yt, yp))
+    lo = alpha / 2 * 100
+    hi = (1 - alpha / 2) * 100
+    return {
+        "auroc": (np.percentile(aurocs, lo), np.percentile(aurocs, hi)),
+        "f1": (np.percentile(f1s, lo), np.percentile(f1s, hi)),
+        "balanced_acc": (np.percentile(accs, lo), np.percentile(accs, hi)),
+    }
+
+
 def evaluate_and_report(
     y_inf: np.ndarray,
     inf_preds: np.ndarray,
@@ -621,6 +650,24 @@ def evaluate_and_report(
     print(f"Inference F1       : {inf_f1:.4f}")
     print(f"Inference AUROC    : {inf_auroc:.4f}")
 
+    ci_str = ""
+    if getattr(args, "confidence_interval", False):
+        ci = _bootstrap_ci(
+            y_inf, inf_preds, inf_proba,
+            n_bootstraps=getattr(args, "ci_n_bootstraps", 1000),
+            alpha=getattr(args, "ci_alpha", 0.05),
+            seed=getattr(args, "seed", 42),
+        )
+        pct = int((1 - getattr(args, "ci_alpha", 0.05)) * 100)
+        ci_str = (
+            f"\n{pct}% Bootstrap Confidence Intervals "
+            f"({getattr(args, 'ci_n_bootstraps', 1000)} resamples):\n"
+            f"  AUROC        : [{ci['auroc'][0]:.4f}, {ci['auroc'][1]:.4f}]\n"
+            f"  F1           : [{ci['f1'][0]:.4f}, {ci['f1'][1]:.4f}]\n"
+            f"  Balanced Acc : [{ci['balanced_acc'][0]:.4f}, {ci['balanced_acc'][1]:.4f}]\n"
+        )
+        print(ci_str)
+
     # Save report
     report_path = output_dir / "classification_report.txt"
     with open(report_path, "w") as f:
@@ -636,6 +683,8 @@ def evaluate_and_report(
         f.write(f"\nInference accuracy : {inf_acc:.4f}")
         f.write(f"\nInference F1       : {inf_f1:.4f}")
         f.write(f"\nInference AUROC    : {inf_auroc:.4f}\n")
+        if ci_str:
+            f.write(ci_str)
     print(f"Report saved       : {report_path}")
 
     # Confusion matrix

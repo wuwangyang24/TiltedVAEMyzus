@@ -184,7 +184,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--xgb_reg_lambda", type=float, default=1.0, help="XGBoost L2 reg (default: 1.0)")
     p.add_argument("--xgb_early_stopping", type=int, default=20, help="XGBoost early stopping (default: 20)")
 
-
+    # ── Confidence interval ──
+    p.add_argument(
+        "--confidence_interval",
+        action="store_true",
+        help="Compute bootstrap 95%% confidence intervals for AUROC, F1, and balanced accuracy",
+    )
+    p.add_argument("--ci_n_bootstraps", type=int, default=1000, help="Number of bootstrap resamples for CI (default: 1000)")
+    p.add_argument("--ci_alpha", type=float, default=0.05, help="Significance level for CI, e.g. 0.05 for 95%% CI (default: 0.05)")
 
     # ── Misc ──
     p.add_argument(
