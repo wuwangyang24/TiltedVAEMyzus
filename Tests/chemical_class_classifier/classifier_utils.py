@@ -9,7 +9,7 @@ MyzusDINOAdapt synthesis-program classifier, trimmed to the CatBoost path):
 
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -337,3 +337,140 @@ def save_results(
         print(f"Predictions saved to: {pred_path}")
 
     print(f"Outputs saved to   : {output_dir}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 4.  Dimension-reduction visualisation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def plot_cluster_visualization(
+    X: np.ndarray,
+    y: np.ndarray,
+    classes: List[str],
+    output_dir: Path,
+    file_suffix: str = "",
+    split_labels: Optional[np.ndarray] = None,
+    seed: int = 42,
+    methods: Tuple[str, ...] = ("umap", "tsne", "pca"),
+) -> None:
+    """Create 2-D scatter plots of *X* coloured by chemical class using
+    UMAP, t-SNE and/or PCA.
+
+    Parameters
+    ----------
+    X : (N, D) feature matrix (already per-compound mean latents).
+    y : (N,) integer class labels.
+    classes : list of class name strings (indexed by *y*).
+    output_dir : directory for saving plots.
+    file_suffix : extra suffix appended to output file names.
+    split_labels : optional (N,) array of "train" / "test" strings.
+        When provided an extra plot per method is generated with marker
+        style distinguishing train vs. test points.
+    seed : random state.
+    methods : which reductions to run (subset of "umap", "tsne", "pca").
+    """
+    from sklearn.decomposition import PCA
+    from sklearn.manifold import TSNE
+
+    try:
+        from umap import UMAP
+        _has_umap = True
+    except ImportError:
+        _has_umap = False
+
+    num_classes = len(classes)
+
+    # ── Colour palette (use tab20 for many classes, tab10 for few) ────────────
+    cmap = plt.cm.tab20 if num_classes > 10 else plt.cm.tab10
+    colours = [cmap(i / max(num_classes - 1, 1)) for i in range(num_classes)]
+
+    reducers: Dict[str, np.ndarray] = {}
+
+    if "pca" in methods:
+        pca = PCA(n_components=2, random_state=seed)
+        reducers["PCA"] = pca.fit_transform(X)
+
+    if "tsne" in methods:
+        perplexity = min(30, max(5, X.shape[0] // 4))
+        tsne = TSNE(n_components=2, perplexity=perplexity, random_state=seed,
+                     init="pca", learning_rate="auto")
+        reducers["t-SNE"] = tsne.fit_transform(X)
+
+    if "umap" in methods:
+        if _has_umap:
+            n_neighbors = min(15, max(2, X.shape[0] // 5))
+            reducer = UMAP(n_components=2, n_neighbors=n_neighbors,
+                           min_dist=0.3, random_state=seed)
+            reducers["UMAP"] = reducer.fit_transform(X)
+        else:
+            print("  [warn] umap-learn not installed — skipping UMAP visualisation.")
+
+    for method_name, coords in reducers.items():
+        _save_scatter(coords, y, classes, colours, num_classes,
+                      method_name, output_dir, file_suffix)
+        if split_labels is not None:
+            _save_scatter_split(coords, y, split_labels, classes, colours,
+                                num_classes, method_name, output_dir, file_suffix)
+
+    print(f"  Cluster plots saved to : {output_dir}")
+
+
+def _save_scatter(
+    coords: np.ndarray,
+    y: np.ndarray,
+    classes: List[str],
+    colours: list,
+    num_classes: int,
+    method_name: str,
+    output_dir: Path,
+    file_suffix: str,
+) -> None:
+    fig, ax = plt.subplots(figsize=(10, 8))
+    for ci in range(num_classes):
+        mask = y == ci
+        ax.scatter(coords[mask, 0], coords[mask, 1],
+                   c=[colours[ci]], label=classes[ci],
+                   s=25, alpha=0.75, edgecolors="none")
+    ax.set_xlabel(f"{method_name} 1")
+    ax.set_ylabel(f"{method_name} 2")
+    ax.set_title(f"Chemical Class Clustering — {method_name}")
+    ax.legend(fontsize=7, markerscale=1.5, loc="best",
+              ncol=max(1, num_classes // 15), framealpha=0.7)
+    fig.tight_layout()
+    tag = method_name.lower().replace("-", "")
+    fig.savefig(output_dir / f"cluster_{tag}{file_suffix}.png", dpi=150)
+    plt.close(fig)
+
+
+def _save_scatter_split(
+    coords: np.ndarray,
+    y: np.ndarray,
+    split_labels: np.ndarray,
+    classes: List[str],
+    colours: list,
+    num_classes: int,
+    method_name: str,
+    output_dir: Path,
+    file_suffix: str,
+) -> None:
+    """Like ``_save_scatter`` but uses circle / cross markers to show
+    train vs. test membership."""
+    fig, ax = plt.subplots(figsize=(10, 8))
+    marker_map = {"train": "o", "val": "s", "test": "x"}
+    for ci in range(num_classes):
+        for split_name, marker in marker_map.items():
+            mask = (y == ci) & (split_labels == split_name)
+            if not mask.any():
+                continue
+            ax.scatter(coords[mask, 0], coords[mask, 1],
+                       c=[colours[ci]], label=f"{classes[ci]} ({split_name})",
+                       s=25, alpha=0.75, marker=marker, edgecolors="none")
+    ax.set_xlabel(f"{method_name} 1")
+    ax.set_ylabel(f"{method_name} 2")
+    ax.set_title(f"Chemical Class Clustering — {method_name} (train/test)")
+    ax.legend(fontsize=6, markerscale=1.5, loc="best",
+              ncol=max(1, num_classes // 8), framealpha=0.7)
+    fig.tight_layout()
+    tag = method_name.lower().replace("-", "")
+    fig.savefig(output_dir / f"cluster_{tag}_split{file_suffix}.png", dpi=150)
+    plt.close(fig)
