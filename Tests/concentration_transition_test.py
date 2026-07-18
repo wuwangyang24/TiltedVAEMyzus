@@ -207,6 +207,7 @@ def compute_smoothness_metrics(
     """
     n_concs = len(concentrations)
     monotonic_count = 0
+    all_increasing_count = 0
     all_decreasing_count = 0
     increasing_then_plateau_count = 0
     cosine_alignments: List[float] = []
@@ -220,6 +221,8 @@ def compute_smoothness_metrics(
         is_monotone = np.all(diffs >= 0) or np.all(diffs <= 0)
         if is_monotone:
             monotonic_count += 1
+        if np.all(diffs >= 0):
+            all_increasing_count += 1
         if np.all(diffs <= 0):
             all_decreasing_count += 1
         if n_concs >= 3 and diffs[0] > 0 and diffs[1] <= 0:
@@ -242,6 +245,7 @@ def compute_smoothness_metrics(
     n_total = max(len(trajectories), 1)
     metrics = {
         "norm_monotonicity": monotonic_count / n_total,
+        "norm_all_increasing": all_increasing_count / n_total,
         "norm_all_decreasing": all_decreasing_count / n_total,
         "norm_inc_then_plateau": increasing_then_plateau_count / n_total,
         "cosine_alignment": float(np.mean(cosine_alignments)) if cosine_alignments else float("nan"),
@@ -574,6 +578,8 @@ def main() -> None:
     print(f"  Concentration levels : {concentrations}")
     print(f"  Norm monotonicity    : {metrics['norm_monotonicity']:.3f} "
           f"({metrics['norm_monotonicity']*100:.1f}% of compounds)")
+    print(f"  Norm all increasing  : {metrics['norm_all_increasing']:.3f} "
+          f"({metrics['norm_all_increasing']*100:.1f}% of compounds)")
     print(f"  Norm all decreasing  : {metrics['norm_all_decreasing']:.3f} "
           f"({metrics['norm_all_decreasing']*100:.1f}% of compounds)")
     print(f"  Norm inc then plateau: {metrics['norm_inc_then_plateau']:.3f} "
