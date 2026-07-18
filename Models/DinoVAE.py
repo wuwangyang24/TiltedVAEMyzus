@@ -103,7 +103,9 @@ class DinoVAE(nn.Module):
         """Pass images through the frozen DINOv2 backbone.
 
         Applies ImageNet normalisation to [0, 1] inputs before feeding them
-        to the DINO encoder.
+        to the DINO encoder.  If the spatial dimensions are not multiples of
+        the patch size (14), the images are bilinearly resized to the nearest
+        larger multiple.
 
         Args:
             images: [B, 3, H, W] float tensor in [0, 1].
@@ -111,6 +113,12 @@ class DinoVAE(nn.Module):
             [B, dino_dim] CLS-token embedding.
         """
         images = (images - self._img_mean) / self._img_std
+        patch_size = 14
+        _, _, H, W = images.shape
+        new_H = H if H % patch_size == 0 else (H // patch_size + 1) * patch_size
+        new_W = W if W % patch_size == 0 else (W // patch_size + 1) * patch_size
+        if new_H != H or new_W != W:
+            images = F.interpolate(images, size=(new_H, new_W), mode='bilinear', align_corners=False)
         return self.dino(images)
 
     def encode(self, input: Tensor) -> List[Tensor]:
