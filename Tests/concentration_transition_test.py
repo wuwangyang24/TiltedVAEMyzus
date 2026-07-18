@@ -19,7 +19,6 @@ This script:
        monotonically with concentration.
      - Cosine alignment: for each compound, checks that successive concentration
        steps point in a consistent direction.
-     - Path straightness: ratio of end-to-end distance to total path length.
 
 Embedding .pt file structure (from encode_embeddings.py):
     {
@@ -205,13 +204,10 @@ def compute_smoothness_metrics(
         monotonically (either increasing or decreasing) with concentration.
       - cosine_alignment: mean cosine similarity between consecutive step
         directions across compounds (1.0 = perfectly straight trajectory).
-      - path_straightness: mean ratio of end-to-end Euclidean distance to total
-        path length (1.0 = perfectly straight, 0.0 = returns to start).
     """
     n_concs = len(concentrations)
     monotonic_count = 0
     cosine_alignments: List[float] = []
-    straightness_ratios: List[float] = []
 
     for compound_id, traj in trajectories.items():
         # traj shape: (n_concs, D)
@@ -237,18 +233,9 @@ def compute_smoothness_metrics(
             if cos_sims:
                 cosine_alignments.append(np.mean(cos_sims))
 
-        # --- Path straightness ---
-        end_to_end = np.linalg.norm(traj[-1] - traj[0])
-        path_length = sum(
-            np.linalg.norm(traj[i + 1] - traj[i]) for i in range(n_concs - 1)
-        )
-        if path_length > 1e-8:
-            straightness_ratios.append(end_to_end / path_length)
-
     metrics = {
         "norm_monotonicity": monotonic_count / max(len(trajectories), 1),
         "cosine_alignment": float(np.mean(cosine_alignments)) if cosine_alignments else float("nan"),
-        "path_straightness": float(np.mean(straightness_ratios)) if straightness_ratios else float("nan"),
         "n_compounds": len(trajectories),
     }
     return metrics
@@ -544,42 +531,6 @@ def plot_pairwise_distance_vs_concentration_gap(
     print(f"[plot] Saved distance vs concentration step to {out_path}")
 
 
-def plot_straightness_histogram(
-    trajectories: Dict[str, np.ndarray],
-    output_dir: str,
-) -> None:
-    """Histogram of path straightness ratios across compounds."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    ratios = []
-    for traj in trajectories.values():
-        end_to_end = np.linalg.norm(traj[-1] - traj[0])
-        path_length = sum(
-            np.linalg.norm(traj[i + 1] - traj[i]) for i in range(len(traj) - 1)
-        )
-        if path_length > 1e-8:
-            ratios.append(end_to_end / path_length)
-
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.hist(ratios, bins=30, alpha=0.7, color="#2ca02c", edgecolor="k",
-            linewidth=0.5)
-    ax.axvline(np.mean(ratios), color="red", linestyle="--", linewidth=1.5,
-               label=f"Mean = {np.mean(ratios):.3f}")
-    ax.set_xlabel("Path straightness (end-to-end / total path length)")
-    ax.set_ylabel("Count")
-    ax.set_title("Trajectory straightness across compounds\n"
-                 "(1.0 = perfectly straight, 0.0 = returns to start)")
-    ax.legend()
-    fig.tight_layout()
-
-    out_path = os.path.join(output_dir, "straightness_histogram.png")
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    print(f"[plot] Saved straightness histogram to {out_path}")
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -616,8 +567,6 @@ def main() -> None:
           f"({metrics['norm_monotonicity']*100:.1f}% of compounds)")
     print(f"  Cosine alignment     : {metrics['cosine_alignment']:.4f} "
           f"(1.0 = perfectly consistent direction)")
-    print(f"  Path straightness    : {metrics['path_straightness']:.4f} "
-          f"(1.0 = perfectly straight trajectory)")
     print(f"{'='*70}")
 
     # ── Visualizations ───────────────────────────────────────────────────────
@@ -641,7 +590,6 @@ def main() -> None:
     plot_norm_vs_concentration(plot_trajs, concentrations, args.output_dir)
     plot_pairwise_distance_vs_concentration_gap(
         plot_trajs, concentrations, args.output_dir)
-    plot_straightness_histogram(plot_trajs, args.output_dir)
 
     print(f"\nAll results saved to {args.output_dir}/")
 
