@@ -207,6 +207,8 @@ def compute_smoothness_metrics(
     """
     n_concs = len(concentrations)
     monotonic_count = 0
+    all_decreasing_count = 0
+    increasing_then_plateau_count = 0
     cosine_alignments: List[float] = []
 
     for compound_id, traj in trajectories.items():
@@ -218,6 +220,10 @@ def compute_smoothness_metrics(
         is_monotone = np.all(diffs >= 0) or np.all(diffs <= 0)
         if is_monotone:
             monotonic_count += 1
+        if np.all(diffs <= 0):
+            all_decreasing_count += 1
+        if n_concs >= 3 and diffs[0] > 0 and diffs[1] <= 0:
+            increasing_then_plateau_count += 1
 
         # --- Cosine alignment of consecutive steps ---
         if n_concs >= 3:
@@ -233,8 +239,11 @@ def compute_smoothness_metrics(
             if cos_sims:
                 cosine_alignments.append(np.mean(cos_sims))
 
+    n_total = max(len(trajectories), 1)
     metrics = {
-        "norm_monotonicity": monotonic_count / max(len(trajectories), 1),
+        "norm_monotonicity": monotonic_count / n_total,
+        "norm_all_decreasing": all_decreasing_count / n_total,
+        "norm_inc_then_plateau": increasing_then_plateau_count / n_total,
         "cosine_alignment": float(np.mean(cosine_alignments)) if cosine_alignments else float("nan"),
         "n_compounds": len(trajectories),
     }
@@ -565,6 +574,12 @@ def main() -> None:
     print(f"  Concentration levels : {concentrations}")
     print(f"  Norm monotonicity    : {metrics['norm_monotonicity']:.3f} "
           f"({metrics['norm_monotonicity']*100:.1f}% of compounds)")
+    print(f"  Norm all decreasing  : {metrics['norm_all_decreasing']:.3f} "
+          f"({metrics['norm_all_decreasing']*100:.1f}% of compounds)")
+    print(f"  Norm inc then plateau: {metrics['norm_inc_then_plateau']:.3f} "
+          f"({metrics['norm_inc_then_plateau']*100:.1f}% of compounds, "
+          f"increasing {concentrations[0]:.0f}→{concentrations[1]:.0f} "
+          f"then non-increasing {concentrations[1]:.0f}→{concentrations[2]:.0f})")
     print(f"  Cosine alignment     : {metrics['cosine_alignment']:.4f} "
           f"(1.0 = perfectly consistent direction)")
     print(f"{'='*70}")
