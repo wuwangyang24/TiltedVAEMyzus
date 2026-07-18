@@ -35,7 +35,7 @@ Usage examples
       --model      tilted --latent_dim 128 --img_size 96
 
   # 2) Train + evaluate the CatBoost chemical-class classifier
-python TiltedVAEMyzus/Tests/chemical_class_classifier/train_chemical_class_classifier.py --embeddings TiltedVAEMyzus/results/checkpoints/tilted-latent128_kl0.001_bestsofar/embeddings_best_balanced_acc.pt --metadata METADATA/synthesisprogram_compoundno.csv --save_predictions --label_col synthesis_program --min_compounds_per_class 30 --subtract_control --normalize_before_subtract --filter_by_efficacy 0
+python TiltedVAEMyzus/Tests/chemical_class_classifier/train_chemical_class_classifier.py --embeddings TiltedVAEMyzus/results/checkpoints/tilted-latent128/embeddings_best_balanced_acc.pt --metadata METADATA/synthesisprogram_compoundno.csv --save_predictions --label_col synthesis_program --min_compounds_per_class 30 --subtract_control --normalize_before_subtract --filter_by_efficacy 0
 
   # With control subtraction, softer class balancing and hyper-parameter tuning
   python Tests/chemical_class_classifier/train_chemical_class_classifier.py \

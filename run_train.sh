@@ -20,7 +20,7 @@ BATCH_SIZE="${BATCH_SIZE:-512}"
 NUM_WORKERS="${NUM_WORKERS:-8}"
 VAL_SPLIT="${VAL_SPLIT:-0.05}"
 MAX_VAL_SAMPLES="${MAX_VAL_SAMPLES:-500000}"
-MODEL="${MODEL:-tilted}"
+MODEL="${MODEL:-dino_vae}"
 LATENT_DIM="${LATENT_DIM:-128}"
 TAU="${TAU:-}"
 LR="${LR:-1e-4}"
@@ -88,4 +88,5 @@ python "${SCRIPT_DIR}/train.py" \
     --cls_label_col       "${CLS_LABEL_COL}" \
     --cls_compound_col    "${CLS_COMPOUND_COL}" \
     --cls_subtract_control \
-    --cls_normalize_before_subtract
+    --cls_normalize_before_subtract \
+    --cls_filter_by_efficacy 0
