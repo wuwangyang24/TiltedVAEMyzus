@@ -78,6 +78,10 @@ def parse_args() -> argparse.Namespace:
                         default="results/concentration_transition_test",
                         help="Directory to save result plots")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--n_sample", type=int, default=None,
+                        help="Number of compounds to randomly sample for "
+                             "trajectory plots. If None, plot all compounds. "
+                             "Metrics are always computed on all compounds.")
 
     args = parser.parse_args()
 
@@ -619,15 +623,25 @@ def main() -> None:
     # ── Visualizations ───────────────────────────────────────────────────────
     print("\nGenerating visualizations...")
 
-    plot_trajectories_pca(trajectories, concentrations, args.output_dir)
-    plot_trajectories_tsne(trajectories, concentrations, args.output_dir,
+    # Optionally subsample compounds for plotting (metrics use all data)
+    plot_trajs = trajectories
+    if args.n_sample is not None and args.n_sample < len(trajectories):
+        rng = np.random.default_rng(args.seed)
+        sampled_keys = rng.choice(
+            sorted(trajectories.keys()), size=args.n_sample, replace=False,
+        )
+        plot_trajs = {k: trajectories[k] for k in sampled_keys}
+        print(f"  Subsampled {args.n_sample} / {len(trajectories)} compounds for plots")
+
+    plot_trajectories_pca(plot_trajs, concentrations, args.output_dir)
+    plot_trajectories_tsne(plot_trajs, concentrations, args.output_dir,
                            seed=args.seed)
-    plot_trajectories_umap(trajectories, concentrations, args.output_dir,
+    plot_trajectories_umap(plot_trajs, concentrations, args.output_dir,
                            seed=args.seed)
-    plot_norm_vs_concentration(trajectories, concentrations, args.output_dir)
+    plot_norm_vs_concentration(plot_trajs, concentrations, args.output_dir)
     plot_pairwise_distance_vs_concentration_gap(
-        trajectories, concentrations, args.output_dir)
-    plot_straightness_histogram(trajectories, args.output_dir)
+        plot_trajs, concentrations, args.output_dir)
+    plot_straightness_histogram(plot_trajs, args.output_dir)
 
     print(f"\nAll results saved to {args.output_dir}/")
 
