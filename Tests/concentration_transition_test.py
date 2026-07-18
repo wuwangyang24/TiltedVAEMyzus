@@ -32,11 +32,7 @@ Embedding .pt file structure (from encode_embeddings.py):
     }
 
 Usage:
-python TiltedVAEMyzus/Tests/concentration_transition_test.py \
-    --embeddings embeddings_20ppm.pt embeddings_100ppm.pt embeddings_500ppm.pt \
-    --concentrations 20 100 500 \
-    --subtract_control --normalize_before_subtract \
-    --output_dir results/concentration_transition_test
+python TiltedVAEMyzus/Tests/concentration_transition_test.py --embeddings TiltedVAEMyzus/Tests/efficacy500_classifier/tiltedvae/embeddings_4ppm.pt TiltedVAEMyzus/Tests/efficacy500_classifier/tiltedvae/embeddings_20ppm.pt TiltedVAEMyzus/Tests/efficacy500_classifier/tiltedvae/embeddings_100ppm.pt --concentrations 4 20 100 --subtract_control --normalize_before_subtract --output_dir results/concentration_transition_test
 """
 
 import argparse
