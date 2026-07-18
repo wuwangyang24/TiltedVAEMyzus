@@ -34,7 +34,7 @@ replicate). A compound must have at least 2 wells to contribute within-compound
 distances.
 
 Usage:
-python TiltedVAEMyzus/Tests/well_compound_distance_test.py --metadata METADATA/metadata_compound_all100ppm.json --root_dir ../DATA_TEST/ --embedding TiltedVAEMyzus/results/checkpoints/tilted-latent128_kl0.001_bestsofar/embeddings_best_balanced_acc.pt --model tilted --latent_dim 128 --img_size 96 --device cpu --max_compounds 1000 --subtract_control --normalize_before_subtract --metric radial 
+python TiltedVAEMyzus/Tests/well_compound_distance_test.py --metadata METADATA/metadata_compound_all100ppm.json --root_dir DATA_TEST/ --embedding TiltedVAEMyzus/results/checkpoints/tilted-latent128_kl0.01/embeddings_best_balanced_acc.pt --model tilted --latent_dim 128 --img_size 96 --device cpu --max_compounds 1000 --subtract_control --normalize_before_subtract --metric radial 
 """
 
 import argparse
