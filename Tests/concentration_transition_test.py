@@ -210,6 +210,7 @@ def compute_smoothness_metrics(
     all_increasing_count = 0
     all_decreasing_count = 0
     increasing_then_plateau_count = 0
+    first_to_last_increasing_count = 0
     cosine_alignments: List[float] = []
 
     for compound_id, traj in trajectories.items():
@@ -227,6 +228,8 @@ def compute_smoothness_metrics(
             all_decreasing_count += 1
         if n_concs >= 3 and diffs[0] > 0 and diffs[1] <= 0:
             increasing_then_plateau_count += 1
+        if norms[-1] > norms[0]:
+            first_to_last_increasing_count += 1
 
         # --- Cosine alignment of consecutive steps ---
         if n_concs >= 3:
@@ -248,6 +251,7 @@ def compute_smoothness_metrics(
         "norm_all_increasing": all_increasing_count / n_total,
         "norm_all_decreasing": all_decreasing_count / n_total,
         "norm_inc_then_plateau": increasing_then_plateau_count / n_total,
+        "norm_first_to_last_inc": first_to_last_increasing_count / n_total,
         "cosine_alignment": float(np.mean(cosine_alignments)) if cosine_alignments else float("nan"),
         "n_compounds": len(trajectories),
     }
@@ -586,6 +590,9 @@ def main() -> None:
           f"({metrics['norm_inc_then_plateau']*100:.1f}% of compounds, "
           f"increasing {concentrations[0]:.0f}→{concentrations[1]:.0f} "
           f"then non-increasing {concentrations[1]:.0f}→{concentrations[2]:.0f})")
+    print(f"  Norm inc {concentrations[0]:.0f}→{concentrations[-1]:.0f}   : "
+          f"{metrics['norm_first_to_last_inc']:.3f} "
+          f"({metrics['norm_first_to_last_inc']*100:.1f}% of compounds)")
     print(f"  Cosine alignment     : {metrics['cosine_alignment']:.4f} "
           f"(1.0 = perfectly consistent direction)")
     print(f"{'='*70}")
