@@ -38,6 +38,28 @@ from Models import VAE, TiltedVAE
 from dataset import _scan_images
 
 
+class DinoV2Wrapper(torch.nn.Module):
+    """Thin wrapper around a pretrained DINOv2 backbone that exposes an
+    ``.encode()`` method compatible with VAE/TiltedVAE.  ImageNet normalization
+    is applied inside ``encode`` so the rest of the pipeline can pass plain
+    [0, 1] images."""
+
+    IMAGENET_MEAN = [0.485, 0.456, 0.406]
+    IMAGENET_STD = [0.229, 0.224, 0.225]
+    IMG_SIZE = 224
+
+    def __init__(self, model_name: str = "dinov2_vits14"):
+        super().__init__()
+        self.backbone = torch.hub.load("facebookresearch/dinov2", model_name)
+        self.normalize = T.Normalize(mean=self.IMAGENET_MEAN,
+                                     std=self.IMAGENET_STD)
+
+    def encode(self, x: torch.Tensor):
+        x = self.normalize(x)
+        features = self.backbone(x)          # (B, D)  D=384 for vits14
+        return features, None                # no log_var
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Scale-permutation test for VAE latent embeddings")
@@ -45,12 +67,14 @@ def parse_args() -> argparse.Namespace:
     # Data / model
     parser.add_argument("--data_dir", type=str, required=True,
                         help="Path to the image dataset (any nested folder layout)")
-    parser.add_argument("--checkpoint", type=str, required=True,
+    parser.add_argument("--checkpoint", type=str, default=None,
                         help="Path to a trained Lightning checkpoint (.ckpt) or a "
-                             "raw model state_dict (.pt/.pth)")
+                             "raw model state_dict (.pt/.pth). "
+                             "Not required for --model dino.")
     parser.add_argument("--model", type=str, default="vae",
-                        choices=["vae", "tilted"],
-                        help="Model architecture matching the checkpoint")
+                        choices=["vae", "tilted", "dino"],
+                        help="Model architecture matching the checkpoint. "
+                             "'dino' uses pretrained DINOv2 vits14.")
     parser.add_argument("--in_channels", type=int, default=3)
     parser.add_argument("--latent_dim", type=int, default=128)
     parser.add_argument("--img_size", type=int, default=96)
@@ -89,6 +113,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_model(args: argparse.Namespace) -> torch.nn.Module:
+    if args.model == "dino":
+        return DinoV2Wrapper()
     if args.model == "tilted":
         model = TiltedVAE(
             in_channels=args.in_channels,
@@ -303,7 +329,12 @@ def main() -> None:
 
     # Model + weights
     model = build_model(args)
-    load_checkpoint(model, args.checkpoint)
+    if args.model == "dino":
+        args.img_size = DinoV2Wrapper.IMG_SIZE
+        args.in_channels = 3
+        print(f"Model  : DINOv2 vits14  (pretrained, img_size={args.img_size})")
+    else:
+        load_checkpoint(model, args.checkpoint)
     model.eval().to(device)
 
     # Select size-matched images and build the three scaled views

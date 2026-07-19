@@ -1,9 +1,9 @@
 """
 encode_embeddings.py
 
-Encode compound images with a trained TiltedVAE / VAE encoder into the
-per-compound / per-plate embedding structure consumed by
-``train_efficacy_classifier.py``.
+Encode compound images with a trained TiltedVAE / VAE encoder (or a
+pretrained DINOv2 backbone) into the per-compound / per-plate embedding
+structure consumed by ``train_efficacy_classifier.py``.
 
 For each compound and each plate:
   - treated images are encoded individually and stored as a (N, D) tensor.
@@ -33,8 +33,11 @@ Output .pt file structure (dict):
         }
     }
 
-Usage:
+Usage (VAE/TiltedVAE):
 python TiltedVAEMyzus/Tests/efficacy500_classifier/encode_embeddings.py --metadata METADATA/metadata_compound_all20ppm.json --root_dir DATA_TEST/ --output TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_20ppm.pt --checkpoint TiltedVAEMyzus/results/checkpoints/tilted-latent128_kl0.001_bestsofar/best_balanced_acc.ckpt --model tilted --latent_dim 128 --img_size 96 --device cpu
+
+Usage (DINOv2 pretrained):
+python TiltedVAEMyzus/Tests/efficacy500_classifier/encode_embeddings.py --metadata METADATA/metadata_compound_all20ppm.json --root_dir DATA_TEST/ --output TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_dino_20ppm.pt --model dino --device cpu
 """
 
 import argparse
@@ -58,9 +61,23 @@ if str(_REPO_ROOT) not in sys.path:
 from Models import VAE, TiltedVAE
 
 
+class DinoV2Wrapper(torch.nn.Module):
+    """Thin wrapper around a pretrained DINOv2 backbone that exposes an
+    ``.encode()`` method compatible with VAE/TiltedVAE."""
+
+    def __init__(self, model_name: str = "dinov2_vits14"):
+        super().__init__()
+        self.backbone = torch.hub.load("facebookresearch/dinov2", model_name)
+
+    def encode(self, x: torch.Tensor):
+        features = self.backbone(x)          # (B, D)  D=384 for vits14
+        return features, None                # no log_var
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Encode compound images with a TiltedVAE/VAE encoder for efficacy classification."
+        description="Encode compound images with a TiltedVAE/VAE encoder "
+                    "(or pretrained DINOv2) for efficacy classification."
     )
     p.add_argument("--metadata", required=True,
                    help="JSON metadata file mapping compounds -> plates -> treated/control paths")
@@ -70,23 +87,33 @@ def parse_args() -> argparse.Namespace:
                    help="Output .pt path for the encoded embeddings")
 
     # Model / checkpoint
-    p.add_argument("--checkpoint", required=True,
-                   help="Trained Lightning checkpoint (.ckpt) or raw state_dict (.pt/.pth)")
-    p.add_argument("--model", default="tilted", choices=["vae", "tilted"],
-                   help="Model architecture matching the checkpoint. Default: tilted")
+    p.add_argument("--checkpoint", default=None,
+                   help="Trained Lightning checkpoint (.ckpt) or raw state_dict (.pt/.pth). "
+                        "Not required for --model dino.")
+    p.add_argument("--model", default="tilted", choices=["vae", "tilted", "dino"],
+                   help="Model architecture. 'dino' uses pretrained DINOv2 vits14. Default: tilted")
     p.add_argument("--in_channels", type=int, default=3)
     p.add_argument("--latent_dim", type=int, default=128)
-    p.add_argument("--img_size", type=int, default=96)
+    p.add_argument("--img_size", type=int, default=96,
+                   help="Image size for VAE/TiltedVAE. Ignored for dino (uses 224).")
     p.add_argument("--tau", type=float, default=None,
                    help="Tilt parameter for TiltedVAE (only used with --model tilted)")
 
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--device", default=None,
                    help="Torch device (default: cuda if available else cpu)")
-    return p.parse_args()
+
+    args = p.parse_args()
+
+    if args.model != "dino" and args.checkpoint is None:
+        p.error("--checkpoint is required for --model vae/tilted")
+
+    return args
 
 
 def build_model(args: argparse.Namespace) -> torch.nn.Module:
+    if args.model == "dino":
+        return DinoV2Wrapper()
     if args.model == "tilted":
         return TiltedVAE(
             in_channels=args.in_channels,
@@ -123,12 +150,19 @@ def load_checkpoint(model: torch.nn.Module, ckpt_path: str) -> None:
               f"{' ...' if len(unexpected) > 5 else ''}")
 
 
-def _build_transform(img_size: int) -> T.Compose:
-    """Square resize + scale to [0, 1] — matches the training preprocessing."""
-    return T.Compose([
+def _build_transform(img_size: int, imagenet_normalize: bool = False) -> T.Compose:
+    """Square resize + scale to [0, 1].  Optionally add ImageNet normalization
+    (required for DINOv2)."""
+    transforms = [
         T.Resize((img_size, img_size), antialias=True),
         T.ConvertImageDtype(torch.float32),
-    ])
+    ]
+    if imagenet_normalize:
+        transforms.append(
+            T.Normalize(mean=[0.485, 0.456, 0.406],
+                        std=[0.229, 0.224, 0.225])
+        )
+    return T.Compose(transforms)
 
 
 @torch.no_grad()
@@ -171,15 +205,24 @@ def main() -> None:
 
     # ── Build model ──────────────────────────────────────────────────────────
     model = build_model(args)
-    load_checkpoint(model, args.checkpoint)
+    if args.model == "dino":
+        print("Model  : DINOv2 vits14  (pretrained, latent dim 384)")
+    else:
+        load_checkpoint(model, args.checkpoint)
+        print(f"Model  : {args.model}  (latent dim {args.latent_dim})")
     model.to(device).eval()
     for param in model.parameters():
         param.requires_grad = False
-    print(f"Model  : {args.model}  (latent dim {args.latent_dim})")
 
     root_dir = Path(args.root_dir)
-    transform = _build_transform(args.img_size)
-    mode = ImageReadMode.GRAY if args.in_channels == 1 else ImageReadMode.RGB
+    if args.model == "dino":
+        img_size = 224
+        transform = _build_transform(img_size, imagenet_normalize=True)
+        mode = ImageReadMode.RGB
+    else:
+        img_size = args.img_size
+        transform = _build_transform(img_size)
+        mode = ImageReadMode.GRAY if args.in_channels == 1 else ImageReadMode.RGB
 
     # ── Load metadata ────────────────────────────────────────────────────────
     with open(args.metadata) as f:

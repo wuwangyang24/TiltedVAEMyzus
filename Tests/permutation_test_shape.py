@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from Models import VAE, TiltedVAE
 from dataset import _scan_images
+from permutation_test_size import DinoV2Wrapper
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,12 +48,14 @@ def parse_args() -> argparse.Namespace:
     # Data / model
     parser.add_argument("--data_dir", type=str, required=True,
                         help="Path to the image dataset (any nested folder layout)")
-    parser.add_argument("--checkpoint", type=str, required=True,
+    parser.add_argument("--checkpoint", type=str, default=None,
                         help="Path to a trained Lightning checkpoint (.ckpt) or a "
-                             "raw model state_dict (.pt/.pth)")
+                             "raw model state_dict (.pt/.pth). "
+                             "Not required for --model dino.")
     parser.add_argument("--model", type=str, default="vae",
-                        choices=["vae", "tilted"],
-                        help="Model architecture matching the checkpoint")
+                        choices=["vae", "tilted", "dino"],
+                        help="Model architecture matching the checkpoint. "
+                             "'dino' uses pretrained DINOv2 vits14.")
     parser.add_argument("--in_channels", type=int, default=3)
     parser.add_argument("--latent_dim", type=int, default=128)
     parser.add_argument("--img_size", type=int, default=96)
@@ -93,6 +96,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_model(args: argparse.Namespace) -> torch.nn.Module:
+    if args.model == "dino":
+        return DinoV2Wrapper()
     if args.model == "tilted":
         model = TiltedVAE(
             in_channels=args.in_channels,
@@ -325,7 +330,12 @@ def main() -> None:
 
     # Model + weights
     model = build_model(args)
-    load_checkpoint(model, args.checkpoint)
+    if args.model == "dino":
+        args.img_size = DinoV2Wrapper.IMG_SIZE
+        args.in_channels = 3
+        print(f"Model  : DINOv2 vits14  (pretrained, img_size={args.img_size})")
+    else:
+        load_checkpoint(model, args.checkpoint)
     model.eval().to(device)
 
     # Select shape-matched images and build the three stretched views
