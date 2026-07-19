@@ -57,6 +57,7 @@ class VAE(nn.Module):
         # Only predict the mean; use fixed unit variance (log_var = 0) to
         # match the TiltedVAE parameter count.
         self.fc_mu = nn.Linear(self.flatten_dim, latent_dim)
+        self.fc_var = nn.Linear(self.flatten_dim, latent_dim)
 
         # Build Decoder
         modules = []
@@ -104,7 +105,7 @@ class VAE(nn.Module):
         result = torch.flatten(result, start_dim=1)
 
         mu = self.fc_mu(result)
-        log_var = torch.zeros_like(mu)
+        log_var = self.fc_var(result)
 
         return [mu, log_var]
 
