@@ -59,6 +59,25 @@ if str(_REPO_ROOT) not in sys.path:
 from Models import VAE, TiltedVAE
 
 
+class DinoV2Wrapper(torch.nn.Module):
+    """Thin wrapper around pretrained DINOv2 with a VAE-like encode API."""
+
+    IMAGENET_MEAN = [0.485, 0.456, 0.406]
+    IMAGENET_STD = [0.229, 0.224, 0.225]
+    IMG_SIZE = 224
+
+    def __init__(self, model_name: str = "dinov2_vits14"):
+        super().__init__()
+        self.backbone = torch.hub.load("facebookresearch/dinov2", model_name)
+        self.normalize = T.Normalize(mean=self.IMAGENET_MEAN,
+                                     std=self.IMAGENET_STD)
+
+    def encode(self, x: torch.Tensor):
+        x = self.normalize(x)
+        features = self.backbone(x)  # (B, D), D=384 for vits14
+        return features, None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Test that same-compound well embeddings are closer than "
@@ -80,9 +99,9 @@ def parse_args() -> argparse.Namespace:
     # Model / checkpoint
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="Trained Lightning checkpoint (.ckpt) or state_dict (.pt/.pth) "
-                             "(required unless --embedding is provided)")
+                            "(required unless --embedding is provided or --model dino)")
     parser.add_argument("--model", type=str, default="tilted",
-                        choices=["vae", "tilted"],
+                        choices=["vae", "tilted", "dino"],
                         help="Model architecture matching the checkpoint")
     parser.add_argument("--in_channels", type=int, default=3)
     parser.add_argument("--latent_dim", type=int, default=128)
@@ -118,10 +137,15 @@ def parse_args() -> argparse.Namespace:
 
     # Validate: either --embedding or (--checkpoint + --root_dir) must be given
     if args.embedding is None:
-        if args.checkpoint is None:
-            parser.error("--checkpoint is required when --embedding is not provided")
+        if args.model != "dino" and args.checkpoint is None:
+            parser.error("--checkpoint is required when --embedding is not provided and --model is not dino")
         if args.root_dir is None:
             parser.error("--root_dir is required when --embedding is not provided")
+
+    if args.model == "dino":
+        if args.in_channels != 3:
+            parser.error("--model dino requires --in_channels 3")
+        args.img_size = DinoV2Wrapper.IMG_SIZE
 
     return args
 
@@ -190,6 +214,8 @@ def load_well_means_from_embedding(
 
 
 def build_model(args: argparse.Namespace) -> torch.nn.Module:
+    if args.model == "dino":
+        return DinoV2Wrapper()
     if args.model == "tilted":
         return TiltedVAE(
             in_channels=args.in_channels,
@@ -628,18 +654,24 @@ def main() -> None:
     else:
         # Build and load model, encode from images
         model = build_model(args)
-        load_checkpoint(model, args.checkpoint)
+        if args.model != "dino":
+            load_checkpoint(model, args.checkpoint)
         model.to(device).eval()
         for param in model.parameters():
             param.requires_grad = False
-        print(f"Model  : {args.model}  (latent dim {args.latent_dim})")
+        if args.model == "dino":
+            print("Model  : DINOv2 vits14  (pretrained, latent dim 384)")
+        else:
+            print(f"Model  : {args.model}  (latent dim {args.latent_dim})")
 
         root_dir = Path(args.root_dir)
         transform = T.Compose([
             T.Resize((args.img_size, args.img_size), antialias=True),
             T.ConvertImageDtype(torch.float32),
         ])
-        mode = ImageReadMode.GRAY if args.in_channels == 1 else ImageReadMode.RGB
+        mode = ImageReadMode.RGB if args.model == "dino" else (
+            ImageReadMode.GRAY if args.in_channels == 1 else ImageReadMode.RGB
+        )
 
         ctrl_msg = " (subtract_control=True)" if args.subtract_control else ""
         print(f"\nEncoding wells (min_wells={args.min_wells}){ctrl_msg}...")
