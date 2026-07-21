@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
+import pandas as pd
 import torch
 
 # Add repo root to path so Models package is importable.
@@ -81,6 +82,18 @@ def parse_args() -> argparse.Namespace:
                         help="Number of compounds to randomly sample for "
                              "trajectory plots. If None, plot all compounds. "
                              "Metrics are always computed on all compounds.")
+
+    # Optional efficacy-vs-trajectory correlation analysis.
+    parser.add_argument("--efficacy_500", type=str, default=None,
+                        help="Optional path to 500ppm efficacy file (.pt, .csv, "
+                             "or .xlsx). If set, computes correlations between "
+                             "trajectory features and efficacy.")
+    parser.add_argument("--efficacy_compound_col", type=str, default=None,
+                        help="Compound ID column in efficacy CSV/XLSX. If omitted, "
+                             "auto-detected.")
+    parser.add_argument("--efficacy_value_col", type=str, default=None,
+                        help="Efficacy value column in efficacy CSV/XLSX. If omitted, "
+                             "auto-detected.")
 
     args = parser.parse_args()
 
@@ -256,6 +269,244 @@ def compute_smoothness_metrics(
         "n_compounds": len(trajectories),
     }
     return metrics
+
+
+def _autodetect_column(columns: List[str], candidates: List[str]) -> str:
+    lower_to_orig = {c.lower(): c for c in columns}
+    for cand in candidates:
+        if cand.lower() in lower_to_orig:
+            return lower_to_orig[cand.lower()]
+    raise ValueError(
+        f"Could not auto-detect required column. Available columns: {columns}"
+    )
+
+
+def load_efficacy_values(
+    efficacy_path: str,
+    compound_col: str | None = None,
+    value_col: str | None = None,
+) -> Dict[str, float]:
+    """Load efficacy values as {compound_id: efficacy_value}.
+
+    Supported formats:
+      - .pt: list of dicts with keys like 'Compound' and 'Efficacy'
+      - .csv/.xlsx/.xls: tabular file with configurable columns
+    """
+    suffix = Path(efficacy_path).suffix.lower()
+
+    if suffix == ".pt":
+        data = torch.load(efficacy_path, map_location="cpu", weights_only=False)
+        out: Dict[str, float] = {}
+        for row in data:
+            cid = row.get("Compound", row.get("compound", row.get("Compound No")))
+            val = row.get("Efficacy", row.get("efficacy", row.get("Active")))
+            if cid is None or val is None:
+                continue
+            out[str(cid).strip()] = float(val)
+        return out
+
+    if suffix in {".csv", ".xlsx", ".xls"}:
+        if suffix == ".csv":
+            df = pd.read_csv(efficacy_path)
+        else:
+            df = pd.read_excel(efficacy_path)
+
+        cols = list(df.columns)
+        compound_col = compound_col or _autodetect_column(
+            cols, ["Compound", "compound", "Compound No", "compound_id"]
+        )
+        value_col = value_col or _autodetect_column(
+            cols, ["Efficacy", "efficacy", "Active", "active"]
+        )
+
+        out = {}
+        for _, row in df.iterrows():
+            cid = str(row[compound_col]).strip()
+            try:
+                val = float(row[value_col])
+            except (TypeError, ValueError):
+                continue
+            out[cid] = val
+        return out
+
+    raise ValueError(
+        f"Unsupported efficacy file extension '{suffix}'. "
+        "Use .pt, .csv, .xlsx, or .xls."
+    )
+
+
+def compute_per_compound_trajectory_features(
+    trajectories: Dict[str, np.ndarray],
+    concentrations: List[float],
+) -> pd.DataFrame:
+    """Compute per-compound scalar features from concentration trajectories."""
+    rows: List[Dict[str, float | str]] = []
+    log_conc = np.log10(np.asarray(concentrations, dtype=float) + 1e-12)
+
+    for compound_id, traj in trajectories.items():
+        steps = np.diff(traj, axis=0)
+        step_norms = np.linalg.norm(steps, axis=1)
+        path_length = float(step_norms.sum())
+        net_displacement = float(np.linalg.norm(traj[-1] - traj[0]))
+        straightness = float(net_displacement / (path_length + 1e-8))
+
+        norms = np.linalg.norm(traj, axis=1)
+        norm_delta = float(norms[-1] - norms[0])
+        norm_ratio = float(norms[-1] / (norms[0] + 1e-8))
+
+        # Linear slope of norm vs log10(concentration).
+        slope = float(np.polyfit(log_conc, norms, deg=1)[0])
+
+        # Direction consistency across consecutive steps.
+        cos_sims: List[float] = []
+        for i in range(len(steps) - 1):
+            n1 = float(np.linalg.norm(steps[i]))
+            n2 = float(np.linalg.norm(steps[i + 1]))
+            if n1 > 1e-8 and n2 > 1e-8:
+                cs = float(np.dot(steps[i], steps[i + 1]) / (n1 * n2))
+                cos_sims.append(cs)
+        cosine_alignment = float(np.mean(cos_sims)) if cos_sims else float("nan")
+
+        rows.append(
+            {
+                "compound_id": str(compound_id),
+                "path_length": path_length,
+                "net_displacement": net_displacement,
+                "straightness": straightness,
+                "mean_step_distance": float(np.mean(step_norms)),
+                "max_step_distance": float(np.max(step_norms)),
+                "norm_delta": norm_delta,
+                "norm_ratio": norm_ratio,
+                "norm_slope_log10ppm": slope,
+                "cosine_alignment": cosine_alignment,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def _corr_with_pvalue(x: np.ndarray, y: np.ndarray, method: str) -> Tuple[float, float]:
+    if method == "spearman":
+        from scipy.stats import spearmanr
+
+        r, p = spearmanr(x, y)
+    elif method == "pearson":
+        from scipy.stats import pearsonr
+
+        r, p = pearsonr(x, y)
+    else:
+        raise ValueError(f"Unknown method: {method}")
+    return float(r), float(p)
+
+
+def correlate_trajectory_with_efficacy(
+    trajectories: Dict[str, np.ndarray],
+    concentrations: List[float],
+    efficacy_values: Dict[str, float],
+    output_dir: str,
+) -> None:
+    """Correlate trajectory-derived features with efficacy values and save outputs."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    feat_df = compute_per_compound_trajectory_features(trajectories, concentrations)
+    feat_df["efficacy_500ppm"] = feat_df["compound_id"].map(efficacy_values)
+    feat_df = feat_df.dropna(subset=["efficacy_500ppm"]).copy()
+
+    if feat_df.empty:
+        print("\n[efficacy-corr] No overlapping compounds between trajectories and efficacy file.")
+        return
+
+    feat_df["efficacy_500ppm"] = feat_df["efficacy_500ppm"].astype(float)
+    features = [
+        "path_length",
+        "net_displacement",
+        "straightness",
+        "mean_step_distance",
+        "max_step_distance",
+        "norm_delta",
+        "norm_ratio",
+        "norm_slope_log10ppm",
+        "cosine_alignment",
+    ]
+
+    corr_rows = []
+    y = feat_df["efficacy_500ppm"].to_numpy(dtype=float)
+
+    for feature in features:
+        x = feat_df[feature].to_numpy(dtype=float)
+        valid = np.isfinite(x) & np.isfinite(y)
+        if valid.sum() < 3:
+            continue
+
+        s_r, s_p = _corr_with_pvalue(x[valid], y[valid], method="spearman")
+        p_r, p_p = _corr_with_pvalue(x[valid], y[valid], method="pearson")
+
+        corr_rows.append(
+            {
+                "feature": feature,
+                "n": int(valid.sum()),
+                "spearman_r": s_r,
+                "spearman_p": s_p,
+                "pearson_r": p_r,
+                "pearson_p": p_p,
+            }
+        )
+
+    corr_df = pd.DataFrame(corr_rows)
+    corr_df = corr_df.sort_values(by="spearman_r", key=np.abs, ascending=False)
+
+    os.makedirs(output_dir, exist_ok=True)
+    feat_path = os.path.join(output_dir, "trajectory_features_with_efficacy.csv")
+    corr_path = os.path.join(output_dir, "trajectory_efficacy_correlations.csv")
+    feat_df.to_csv(feat_path, index=False)
+    corr_df.to_csv(corr_path, index=False)
+
+    print("\n" + "=" * 70)
+    print("TRAJECTORY vs 500ppm EFFICACY CORRELATION")
+    print("=" * 70)
+    print(f"  Overlapping compounds: {len(feat_df)}")
+
+    if corr_df.empty:
+        print("  Not enough valid points to compute correlations.")
+        print("=" * 70)
+        return
+
+    for _, row in corr_df.iterrows():
+        print(
+            f"  {row['feature']:<22} "
+            f"Spearman r={row['spearman_r']:+.3f} (p={row['spearman_p']:.3g}), "
+            f"Pearson r={row['pearson_r']:+.3f} (p={row['pearson_p']:.3g}), "
+            f"n={int(row['n'])}"
+        )
+
+    print("=" * 70)
+    print(f"  Saved per-compound table : {feat_path}")
+    print(f"  Saved correlation table  : {corr_path}")
+
+    # Plot top-3 features by |Spearman r| against efficacy.
+    top_df = corr_df.head(3)
+    n_plots = len(top_df)
+    fig, axes = plt.subplots(1, n_plots, figsize=(5 * n_plots, 4), squeeze=False)
+
+    for idx, (_, row) in enumerate(top_df.iterrows()):
+        feat = row["feature"]
+        ax = axes[0, idx]
+        ax.scatter(feat_df[feat], feat_df["efficacy_500ppm"], alpha=0.7, s=28)
+        ax.set_xlabel(feat)
+        ax.set_ylabel("500ppm efficacy")
+        ax.set_title(
+            f"{feat}\nSpearman r={row['spearman_r']:+.2f}, "
+            f"Pearson r={row['pearson_r']:+.2f}"
+        )
+        ax.grid(True, alpha=0.25)
+
+    fig.tight_layout()
+    plot_path = os.path.join(output_dir, "trajectory_vs_efficacy_top_features.png")
+    fig.savefig(plot_path, dpi=150)
+    plt.close(fig)
+    print(f"  Saved scatter plot       : {plot_path}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -618,6 +869,20 @@ def main() -> None:
     plot_norm_vs_concentration(plot_trajs, concentrations, args.output_dir)
     plot_pairwise_distance_vs_concentration_gap(
         plot_trajs, concentrations, args.output_dir)
+
+    if args.efficacy_500:
+        print("\nComputing trajectory-efficacy correlations...")
+        efficacy_values = load_efficacy_values(
+            args.efficacy_500,
+            compound_col=args.efficacy_compound_col,
+            value_col=args.efficacy_value_col,
+        )
+        correlate_trajectory_with_efficacy(
+            trajectories=trajectories,
+            concentrations=concentrations,
+            efficacy_values=efficacy_values,
+            output_dir=args.output_dir,
+        )
 
     print(f"\nAll results saved to {args.output_dir}/")
 
