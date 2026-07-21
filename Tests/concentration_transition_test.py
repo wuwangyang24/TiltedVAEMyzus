@@ -837,10 +837,13 @@ def main() -> None:
           f"({metrics['norm_all_increasing']*100:.1f}% of compounds)")
     print(f"  Norm all decreasing  : {metrics['norm_all_decreasing']:.3f} "
           f"({metrics['norm_all_decreasing']*100:.1f}% of compounds)")
-    print(f"  Norm inc then plateau: {metrics['norm_inc_then_plateau']:.3f} "
-          f"({metrics['norm_inc_then_plateau']*100:.1f}% of compounds, "
-          f"increasing {concentrations[0]:.0f}→{concentrations[1]:.0f} "
-          f"then non-increasing {concentrations[1]:.0f}→{concentrations[2]:.0f})")
+    if len(concentrations) >= 3:
+        print(f"  Norm inc then plateau: {metrics['norm_inc_then_plateau']:.3f} "
+              f"({metrics['norm_inc_then_plateau']*100:.1f}% of compounds, "
+              f"increasing {concentrations[0]:.0f}→{concentrations[1]:.0f} "
+              f"then non-increasing {concentrations[1]:.0f}→{concentrations[2]:.0f})")
+    else:
+        print("  Norm inc then plateau: N/A (requires at least 3 concentration levels)")
     print(f"  Norm inc {concentrations[0]:.0f}→{concentrations[-1]:.0f}   : "
           f"{metrics['norm_first_to_last_inc']:.3f} "
           f"({metrics['norm_first_to_last_inc']*100:.1f}% of compounds)")
