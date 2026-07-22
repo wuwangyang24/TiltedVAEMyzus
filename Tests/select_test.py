@@ -63,6 +63,35 @@ color_test = _load_test_module("permutation_test_color.py", "permutation_test_co
 shape_test = _load_test_module("permutation_test_shape.py", "permutation_test_shape")
 
 
+def load_selected_paths(list_path: str, pool: int) -> List[str]:
+    """Load previously selected image paths from disk.
+
+    Empty lines are ignored. Missing files raise FileNotFoundError and an empty
+    list raises ValueError so callers can decide whether to fall back.
+    """
+    if not os.path.isfile(list_path):
+        raise FileNotFoundError(list_path)
+
+    with open(list_path, "r", encoding="utf-8") as f:
+        paths = [line.strip() for line in f if line.strip()]
+
+    if not paths:
+        raise ValueError(f"No image paths found in '{list_path}'.")
+
+    if pool > 0:
+        paths = paths[:pool]
+
+    missing = [p for p in paths if not os.path.isfile(p)]
+    if missing:
+        print(f"[select] Warning: {len(missing)} saved paths are missing on disk and were dropped.")
+        paths = [p for p in paths if os.path.isfile(p)]
+
+    if not paths:
+        raise ValueError(f"All paths in '{list_path}' are missing on disk.")
+
+    return paths
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Select a size- and color-matched image group and run both "
@@ -128,6 +157,12 @@ def parse_args() -> argparse.Namespace:
                              "darker/stretched_length/stretched_width) so the "
                              "'original' points land at identical coordinates in "
                              "all plots")
+    parser.add_argument("--reuse_selected_paths", action="store_true",
+                        help="Reuse a previously saved selected image list instead "
+                            "of recomputing size/color/shape matching")
+    parser.add_argument("--selected_paths_file", type=str, default=None,
+                        help="Path to a saved selected_paths.txt file. If omitted, "
+                            "defaults to <output_dir>/selected_paths.txt")
 
     return parser.parse_args()
 
@@ -274,11 +309,22 @@ def main() -> None:
         size_test.load_checkpoint(model, args.checkpoint)
     model.eval().to(device)
 
-    # Select the shared, size-, color- and shape-matched image group.
-    paths = select_matched_paths(
-        args.data_dir, args.in_channels, args.black_threshold, args.pool,
-        args.size_percentile, args.color_percentile, args.shape_percentile,
-        args.output_dir)
+    # Select or reuse the shared, size-, color- and shape-matched image group.
+    selected_list_path = (
+        args.selected_paths_file
+        if args.selected_paths_file
+        else os.path.join(args.output_dir, "selected_paths.txt")
+    )
+
+    if args.reuse_selected_paths:
+        print(f"[select] Reusing saved image list from {selected_list_path}")
+        paths = load_selected_paths(selected_list_path, args.pool)
+        print(f"[select] Loaded {len(paths)} paths from saved selection")
+    else:
+        paths = select_matched_paths(
+            args.data_dir, args.in_channels, args.black_threshold, args.pool,
+            args.size_percentile, args.color_percentile, args.shape_percentile,
+            args.output_dir)
     n = len(paths)
 
     size_names = ["original", "enlarged", "shrunk"]
