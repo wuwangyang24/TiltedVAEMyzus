@@ -172,22 +172,22 @@ def main() -> None:
         raise FileNotFoundError(f"500ppm CSV not found: {csv_path}")
 
     image_counts = load_compound_image_counts(metadata_path)
-    selected_compounds, n_selected_classes, n_compounds_in_class_file = select_class_filtered_compounds(
+    selected_compounds, _, _ = select_class_filtered_compounds(
         class_metadata_path=class_metadata_path,
         compound_col=args.class_compound_col,
         label_col=args.label_col,
         min_compounds_per_class=args.min_compounds_per_class,
     )
-    ppm500_compounds, n_rows_500ppm = compounds_from_500ppm(
+    ppm500_compounds, _ = compounds_from_500ppm(
         csv_path,
         args.ppm500_compound_col,
     )
 
-    sel_total, sel_treated, sel_control, sel_found, sel_missing = summarize_image_counts(
+    sel_total, sel_treated, sel_control, _, _ = summarize_image_counts(
         selected_compounds,
         image_counts,
     )
-    ppm_total, ppm_treated, ppm_control, ppm_found, ppm_missing = summarize_image_counts(
+    ppm_total, ppm_treated, ppm_control, _, _ = summarize_image_counts(
         ppm500_compounds,
         image_counts,
     )
@@ -195,15 +195,6 @@ def main() -> None:
     print("=" * 60)
     print("Chemical-class selected compounds (class filter)")
     print("=" * 60)
-    print(f"Chemical metadata    : {metadata_path}")
-    print(f"Class metadata       : {class_metadata_path}")
-    print(f"Compound column      : {args.class_compound_col}")
-    print(f"Label column         : {args.label_col}")
-    print(f"Min compounds/class  : {args.min_compounds_per_class}")
-    print(f"Compounds in class file (unique) : {n_compounds_in_class_file}")
-    print(f"Selected classes     : {n_selected_classes}")
-    print(f"Selected compounds (counted) : {sel_found}")
-    print(f"Ignored (not in metadata)    : {sel_missing}")
     print(f"Treated images       : {sel_treated}")
     print(f"Control images       : {sel_control}")
     print(f"Total images         : {sel_total}")
@@ -211,11 +202,6 @@ def main() -> None:
     print("\n" + "=" * 60)
     print("500ppm CSV compounds")
     print("=" * 60)
-    print(f"CSV file             : {csv_path}")
-    print(f"500ppm compound col  : {args.ppm500_compound_col}")
-    print(f"Rows                 : {n_rows_500ppm}")
-    print(f"Unique compounds (counted) : {ppm_found}")
-    print(f"Ignored (not in metadata)  : {ppm_missing}")
     print(f"Treated images       : {ppm_treated}")
     print(f"Control images       : {ppm_control}")
     print(f"Total images         : {ppm_total}")
