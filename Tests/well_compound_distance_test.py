@@ -526,9 +526,9 @@ def plot_distance_distributions(
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.hist(within, bins=50, alpha=0.6, label=f"Within-compound (n={len(within)})",
+        ax.hist(within, bins=50, alpha=0.6, label="Within-compound",
             color="#2ca02c", density=True)
-    ax.hist(between, bins=50, alpha=0.6, label=f"Between-compound (n={len(between)})",
+        ax.hist(between, bins=50, alpha=0.6, label="Between-compound",
             color="#d62728", density=True)
     ax.axvline(within.mean(), color="#2ca02c", linestyle="--", linewidth=1.5,
                label=f"Within mean = {within.mean():.4f}")
@@ -536,7 +536,6 @@ def plot_distance_distributions(
                label=f"Between mean = {between.mean():.4f}")
     ax.set_xlabel(f"{metric.capitalize()} distance")
     ax.set_ylabel("Density")
-    ax.set_title("Well-level mean embedding distances:\nWithin-compound vs Between-compound")
     ax.legend()
     fig.tight_layout()
     fig.savefig(output_path, dpi=150)
