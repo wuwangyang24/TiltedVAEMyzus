@@ -88,6 +88,7 @@ try:
         load_efficacy,
         binarize_efficacy,
         load_inference_labels,
+        load_compound_efficacy_values,
         build_mean_latent_features,
         evaluate_and_report,
     )
@@ -97,6 +98,7 @@ except ImportError:
         load_efficacy,
         binarize_efficacy,
         load_inference_labels,
+        load_compound_efficacy_values,
         build_mean_latent_features,
         evaluate_and_report,
     )
@@ -162,6 +164,21 @@ def parse_args() -> argparse.Namespace:
         "--inference_efficacy",
         default="Tests/efficacy500_classifier/efficacy_500ppm.csv",
         help="Ground-truth efficacy for inference evaluation CSV with 'Compound No' and 'Active' columns (default: Tests/efficacy500_classifier/efficacy_500ppm.csv)",
+    )
+    p.add_argument(
+        "--range_efficacy",
+        default="Tests/efficacy500_classifier/efficacy.pt",
+        help="File with numeric efficacy values used for efficacy-range TPR/TNR binning (default: Tests/efficacy500_classifier/efficacy.pt)",
+    )
+    p.add_argument(
+        "--range_compound_col",
+        default=None,
+        help="Optional compound ID column for --range_efficacy when using CSV/XLSX",
+    )
+    p.add_argument(
+        "--range_value_col",
+        default=None,
+        help="Optional efficacy value column for --range_efficacy when using CSV/XLSX",
     )
 
     # ── Threshold ──
@@ -347,6 +364,18 @@ def main() -> None:
     inf_cid2label = load_inference_labels(args.inference_efficacy)
     print(f"  {len(inf_cid2label)} compounds in inference efficacy file.")
 
+    # Optional efficacy source dedicated to range metrics (defaults to 100ppm efficacy).
+    print(f"Loading range efficacy       : {args.range_efficacy}")
+    inf_cid2eff = load_compound_efficacy_values(
+        args.range_efficacy,
+        compound_col=args.range_compound_col,
+        value_col=args.range_value_col,
+    )
+    if inf_cid2eff:
+        print(f"  {len(inf_cid2eff)} compounds with numeric efficacy values found for range analysis.")
+    else:
+        print("  No numeric efficacy values loaded for range analysis; range TPR/TNR will be skipped.")
+
     # ── Diagnostic: show ID overlap ──────────────────────────────────────
     emb_keys = set(str(k) for k in inf_embeddings.keys())
     csv_keys = set(inf_cid2label.keys())
@@ -368,6 +397,8 @@ def main() -> None:
     evaluate_and_report(
         y_inf, inf_preds, inf_proba, cids_inf,
         classifier_label, args, output_dir,
+        inf_efficacy_values=np.array([inf_cid2eff.get(cid, np.nan) for cid in cids_inf], dtype=float)
+        if inf_cid2eff else None,
     )
 
 

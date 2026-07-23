@@ -11,7 +11,7 @@ Shared utilities for efficacy-500ppm binary classifiers:
 
 import argparse
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -62,6 +62,98 @@ def load_inference_labels(csv_path: str) -> Dict[str, int]:
     """Load inference CSV with 'Compound No' and 'Active' columns."""
     df = pd.read_csv(csv_path)
     return {str(row["Compound No"]).strip(): int(row["Active"]) for _, row in df.iterrows()}
+
+
+def load_inference_efficacy_values(csv_path: str) -> Dict[str, float]:
+    """Load inference CSV efficacy values as {compound_id: efficacy_value}.
+
+    The function auto-detects common column names. If no efficacy-like
+    column is present, returns an empty dict.
+    """
+    df = pd.read_csv(csv_path)
+
+    compound_col = None
+    for candidate in ["Compound No", "Compound", "compound", "compound_id"]:
+        if candidate in df.columns:
+            compound_col = candidate
+            break
+
+    if compound_col is None:
+        return {}
+
+    efficacy_col = None
+    for candidate in ["Efficacy", "efficacy", "efficacy_500ppm"]:
+        if candidate in df.columns:
+            efficacy_col = candidate
+            break
+
+    if efficacy_col is None:
+        return {}
+
+    out: Dict[str, float] = {}
+    for _, row in df.iterrows():
+        cid = str(row[compound_col]).strip()
+        val = pd.to_numeric(row[efficacy_col], errors="coerce")
+        if pd.notna(val):
+            out[cid] = float(val)
+    return out
+
+
+def load_compound_efficacy_values(
+    efficacy_path: str,
+    compound_col: Optional[str] = None,
+    value_col: Optional[str] = None,
+) -> Dict[str, float]:
+    """Load compound efficacy values from .pt/.csv/.xlsx.
+
+    Returns {compound_id: efficacy_value}. For tabular files, columns can be
+    explicitly provided or auto-detected from common names.
+    """
+    suffix = Path(efficacy_path).suffix.lower()
+
+    if suffix == ".pt":
+        data = torch.load(efficacy_path, map_location="cpu", weights_only=False)
+        out: Dict[str, float] = {}
+        for row in data:
+            cid = row.get("Compound", row.get("compound", row.get("Compound No")))
+            val = row.get("Efficacy", row.get("efficacy", row.get("efficacy_500ppm")))
+            if cid is None or val is None:
+                continue
+            val_num = pd.to_numeric(val, errors="coerce")
+            if pd.notna(val_num):
+                out[str(cid).strip()] = float(val_num)
+        return out
+
+    if suffix == ".csv":
+        df = pd.read_csv(efficacy_path)
+    elif suffix in {".xlsx", ".xls"}:
+        df = pd.read_excel(efficacy_path)
+    else:
+        return {}
+
+    cols = list(df.columns)
+
+    if compound_col is None:
+        for candidate in ["Compound No", "Compound", "compound", "compound_id"]:
+            if candidate in cols:
+                compound_col = candidate
+                break
+    if value_col is None:
+        for candidate in ["Efficacy", "efficacy", "efficacy_500ppm"]:
+            if candidate in cols:
+                value_col = candidate
+                break
+
+    if compound_col is None or value_col is None:
+        return {}
+
+    out: Dict[str, float] = {}
+    for _, row in df.iterrows():
+        cid = str(row[compound_col]).strip()
+        val = pd.to_numeric(row[value_col], errors="coerce")
+        if pd.notna(val):
+            out[cid] = float(val)
+    return out
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -634,6 +726,7 @@ def evaluate_and_report(
     classifier_label: str,
     args: argparse.Namespace,
     output_dir: Path,
+    inf_efficacy_values: Optional[np.ndarray] = None,
 ) -> None:
     """Compute metrics, print report, and save outputs."""
     inf_acc = balanced_accuracy_score(y_inf, inf_preds)
@@ -668,6 +761,66 @@ def evaluate_and_report(
         )
         print(ci_str)
 
+    range_perf_str = ""
+    range_rows = []
+    if inf_efficacy_values is not None:
+        efficacy_ranges = [
+            (0.0, 10.0),
+            (10.0, 20.0),
+            (20.0, 30.0),
+            (30.0, 40.0),
+            (40.0, 50.0),
+            (50.0, 60.0),
+            (60.0, 70.0),
+        ]
+
+        lines = ["\nTPR/TNR by efficacy range:"]
+        for idx, (lo, hi) in enumerate(efficacy_ranges):
+            if idx == len(efficacy_ranges) - 1:
+                mask = (inf_efficacy_values >= lo) & (inf_efficacy_values <= hi)
+                bin_name = f"[{int(lo)}, {int(hi)}]"
+            else:
+                mask = (inf_efficacy_values >= lo) & (inf_efficacy_values < hi)
+                bin_name = f"[{int(lo)}, {int(hi)})"
+
+            n_bin = int(mask.sum())
+            if n_bin == 0:
+                lines.append(f"  {bin_name}: n=0, TPR=NA, TNR=NA")
+                range_rows.append({
+                    "efficacy_range": bin_name,
+                    "n": 0,
+                    "n_positive": 0,
+                    "n_negative": 0,
+                    "TPR": np.nan,
+                    "TNR": np.nan,
+                })
+                continue
+
+            y_bin = y_inf[mask]
+            p_bin = inf_preds[mask]
+            cm_bin = confusion_matrix(y_bin, p_bin, labels=[0, 1])
+            tn, fp, fn, tp = cm_bin.ravel()
+
+            tpr = tp / (tp + fn) if (tp + fn) > 0 else np.nan
+            tnr = tn / (tn + fp) if (tn + fp) > 0 else np.nan
+
+            tpr_str = f"{tpr:.4f}" if not np.isnan(tpr) else "NA"
+            tnr_str = f"{tnr:.4f}" if not np.isnan(tnr) else "NA"
+            lines.append(
+                f"  {bin_name}: n={n_bin}, pos={tp + fn}, neg={tn + fp}, TPR={tpr_str}, TNR={tnr_str}"
+            )
+            range_rows.append({
+                "efficacy_range": bin_name,
+                "n": n_bin,
+                "n_positive": int(tp + fn),
+                "n_negative": int(tn + fp),
+                "TPR": tpr,
+                "TNR": tnr,
+            })
+
+        range_perf_str = "\n" + "\n".join(lines) + "\n"
+        print(range_perf_str)
+
     # Save report
     report_path = output_dir / "classification_report.txt"
     with open(report_path, "w") as f:
@@ -685,6 +838,8 @@ def evaluate_and_report(
         f.write(f"\nInference AUROC    : {inf_auroc:.4f}\n")
         if ci_str:
             f.write(ci_str)
+        if range_perf_str:
+            f.write(range_perf_str)
     print(f"Report saved       : {report_path}")
 
     # Confusion matrix
@@ -730,5 +885,9 @@ def evaluate_and_report(
         "correct": [int(t == p) for t, p in zip(y_inf, inf_preds)],
     })
     pred_df.to_csv(output_dir / "predictions.csv", index=False)
+
+    if range_rows:
+        range_df = pd.DataFrame(range_rows)
+        range_df.to_csv(output_dir / "efficacy_range_performance.csv", index=False)
 
     print(f"Outputs saved to   : {output_dir}")

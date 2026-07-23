@@ -38,6 +38,7 @@ if str(_REPO_ROOT) not in sys.path:
 try:
     from .classifier_utils import (
         load_inference_labels,
+        load_inference_efficacy_values,
         build_mean_latent_features,
         evaluate_and_report,
     )
@@ -45,6 +46,7 @@ try:
 except ImportError:
     from classifier_utils import (
         load_inference_labels,
+        load_inference_efficacy_values,
         build_mean_latent_features,
         evaluate_and_report,
     )
@@ -160,6 +162,11 @@ def main() -> None:
     print(f"Loading labels CSV: {args.labels_csv}")
     cid2label_all: Dict[str, int] = load_inference_labels(args.labels_csv)
     print(f"  {len(cid2label_all)} compounds in labels CSV")
+    cid2eff_all: Dict[str, float] = load_inference_efficacy_values(args.labels_csv)
+    if cid2eff_all:
+        print(f"  {len(cid2eff_all)} compounds with numeric efficacy values found for range analysis")
+    else:
+        print("  No numeric efficacy column found for range analysis; range TPR/TNR will be skipped")
 
     emb_ids = {str(k) for k in embeddings.keys()}
     label_ids = set(cid2label_all.keys())
@@ -285,6 +292,8 @@ def main() -> None:
         classifier_label="XGBoost",
         args=args,
         output_dir=output_dir,
+        inf_efficacy_values=np.array([cid2eff_all.get(cid, np.nan) for cid in cids_test], dtype=float)
+        if cid2eff_all else None,
     )
 
 
