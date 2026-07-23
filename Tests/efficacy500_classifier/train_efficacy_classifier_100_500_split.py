@@ -14,10 +14,7 @@ Workflow
 
 Example
 -------
-python Tests/efficacy500_classifier/train_efficacy_classifier_100_500_split.py \
-    --embeddings Tests/efficacy500_classifier/embeddings_100ppm.pt \
-    --labels_csv Tests/efficacy500_classifier/efficacy_500ppm.csv \
-    --test_size 0.2 --seed 42 --scale_pos_weight
+python TiltedVAEMyzus/Tests/efficacy500_classifier/train_efficacy_classifier_100_500_split.py --embeddings TiltedVAEMyzus/Tests/efficacy500_classifier/tiltedvae/embeddings_100ppm.pt --labels_csv TiltedVAEMyzus/Tests/efficacy500_classifier/compounds500ppm.csv --test_size 0.2 --seed 42 --scale_pos_weight
 """
 
 import argparse
