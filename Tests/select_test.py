@@ -26,7 +26,7 @@ All tests reuse the exact functions from ``permutation_test_size.py``,
 behaviour is unchanged; only the image group is shared.
 
 Examples:
-python TiltedVAEMyzus/Tests/select_test.py --data_dir DATA/Train/ --checkpoint TiltedVAEMyzus/results/checkpoints/tilted-latent128_kl0.001_bestsofar/best_balanced_acc.ckpt --model tilted --pool 500 --method pca --device cpu
+python TiltedVAEMyzus/Tests/select_test.py --data_dir DATA/Train/ --checkpoint TiltedVAEMyzus/results/checkpoints/tilted-latent128_kl0.001_bestsofar/best_balanced_acc.ckpt --model tilted --pool 500 --method pca --device cpu --reuse_selected_paths --selected_paths_file results/permutation_test/selected_paths.txt
 """
 import argparse
 import importlib.util
