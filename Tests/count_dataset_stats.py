@@ -4,13 +4,7 @@ Simple dataset counter for:
 2) Compounds listed in 500ppm CSV
 
 Examples:
-python Tests/count_dataset_stats.py \
-  --chemical_metadata METADATA/metadata_compound_all100ppm.json \
-    --class_metadata METADATA/synthesisprogram_compoundno.csv \
-    --ppm500_csv Tests/efficacy500_classifier/compounds500ppm.csv \
-    --class_compound_col compound \
-    --label_col synthesis_program \
-    --min_compounds_per_class 30
+python TiltedVAEMyzus/Tests/count_dataset_stats.py --chemical_metadata METADATA/metadata_compound_all100ppm.json --class_metadata METADATA/synthesisprogram_compoundno.csv --ppm500_csv TiltedVAEMyzus/Tests/efficacy500_classifier/compounds500ppm.csv --class_compound_col compound --label_col synthesis_program --min_compounds_per_class 30
 """
 
 import argparse
