@@ -5,7 +5,7 @@ import torch
 import pytorch_lightning as pl
 import torchvision.utils as vutils
 
-from Models import VAE, TiltedVAE, DinoTiltedVAE, DinoVAE
+from Models import VAE, TiltedVAE, DinoVAE
 
 
 class VAEExperiment(pl.LightningModule):
@@ -33,7 +33,7 @@ class VAEExperiment(pl.LightningModule):
     """
 
     def __init__(self,
-                 model: Union[VAE, TiltedVAE, DinoTiltedVAE, DinoVAE],
+                 model: Union[VAE, TiltedVAE, DinoVAE],
                  lr: float = 1e-3,
                  weight_decay: float = 0.0,
                  kld_weight: float = 0.005,
@@ -197,7 +197,7 @@ class VAEExperiment(pl.LightningModule):
             return
 
         # DINO-based models output embeddings, not images — skip image logging.
-        if isinstance(self.model, (DinoTiltedVAE, DinoVAE)):
+        if isinstance(self.model, DinoVAE):
             return
 
         # Fetch a fixed batch once and reuse it, so we don't rebuild the val
