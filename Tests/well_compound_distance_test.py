@@ -526,9 +526,9 @@ def plot_distance_distributions(
     import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(8, 5))
-        ax.hist(within, bins=50, alpha=0.6, label="Within-compound",
+    ax.hist(within, bins=50, alpha=0.6, label="Within-compound",
             color="#2ca02c", density=True)
-        ax.hist(between, bins=50, alpha=0.6, label="Between-compound",
+    ax.hist(between, bins=50, alpha=0.6, label="Between-compound",
             color="#d62728", density=True)
     ax.axvline(within.mean(), color="#2ca02c", linestyle="--", linewidth=1.5,
                label=f"Within mean = {within.mean():.4f}")
