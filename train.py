@@ -6,7 +6,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
-from Models import VAE, TiltedVAE, DinoVAE
+from Models import VAE, TiltedVAE
 from dataset import VAEDataModule
 from experiment import VAEExperiment
 from Tests.chemical_class_classifier.classifier_callback import ChemicalClassClassifierCallback
@@ -36,10 +36,9 @@ def parse_args() -> argparse.Namespace:
 
     # Model
         parser.add_argument("--model", type=str, default="vae",
-                            choices=["vae", "tilted", "dino_vae"],
+                            choices=["vae", "tilted"],
                         help="Which model to train: 'vae' (standard VAE), "
-                             "'tilted' (TiltedVAE with an exponentially tilted prior), "
-                            "or 'dino_vae' (DINOv2 encoder + standard VAE)")
+                                "or 'tilted' (TiltedVAE with an exponentially tilted prior)")
     parser.add_argument("--in_channels", type=int, default=3)
     parser.add_argument("--latent_dim", type=int, default=128)
     parser.add_argument("--tau", type=float, default=None,
@@ -151,11 +150,7 @@ def main() -> None:
     )
 
     # Model
-    if args.model == "dino_vae":
-        model = DinoVAE(
-            latent_dim=args.latent_dim,
-        )
-    elif args.model == "tilted":
+    if args.model == "tilted":
         model = TiltedVAE(
             in_channels=args.in_channels,
             latent_dim=args.latent_dim,
