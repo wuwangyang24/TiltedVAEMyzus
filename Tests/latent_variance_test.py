@@ -5,6 +5,7 @@ with a VAE-family model, and reports the variance of each latent dimension.
 
 python TiltedVAEMyzus/Tests/latent_variance_test.py --data_dir DATA/Train --model vae --latent_dim 128
 python TiltedVAEMyzus/Tests/latent_variance_test.py --data_dir DATA/Train --model tilted --latent_dim 128 --embeddings TiltedVAEMyzus/Tests/efficacy500_classifier/tiltedvae/128/embeddings_100ppm.pt
+"""
 
 import argparse
 import os
