@@ -37,13 +37,8 @@ def parse_args() -> argparse.Namespace:
     # Model
     parser.add_argument("--model", type=str, default="vae",
                         choices=["vae", "tilted"],
-<<<<<<< HEAD
                         help="Which model to train: 'vae' (standard VAE), "
                              "or 'tilted' (TiltedVAE with an exponentially tilted prior)")
-=======
-                    help="Which model to train: 'vae' (standard VAE), "
-                            "or 'tilted' (TiltedVAE with an exponentially tilted prior)")
->>>>>>> 05f9e4fc3ff7aca70018099cea165e5d969f2b60
     parser.add_argument("--in_channels", type=int, default=3)
     parser.add_argument("--latent_dim", type=int, default=128)
     parser.add_argument("--tau", type=float, default=None,

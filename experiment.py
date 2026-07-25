@@ -96,8 +96,11 @@ class VAEExperiment(pl.LightningModule):
         # Weak-SIGReg (Akbar, 2026): covariance regularization towards identity.
         if self.weak_sigreg_weight > 0.0:
             weak_sigreg_loss = self._weak_sigreg_loss(mu)
+            sigreg_weight = kld_weight if self.anneal_kld else self.weak_sigreg_weight
             loss_dict["SIGReg_Weak"] = weak_sigreg_loss.detach()
-            loss_dict["loss"] = loss_dict["loss"] + self.weak_sigreg_weight * weak_sigreg_loss
+            loss_dict["SIGReg_Weak_weight"] = torch.tensor(
+                float(sigreg_weight), device=mu.device)
+            loss_dict["loss"] = loss_dict["loss"] + sigreg_weight * weak_sigreg_loss
 
         return loss_dict, mu
 
