@@ -35,10 +35,10 @@ def parse_args() -> argparse.Namespace:
                              "validation fast on very large datasets")
 
     # Model
-        parser.add_argument("--model", type=str, default="vae",
-                            choices=["vae", "tilted"],
-                        help="Which model to train: 'vae' (standard VAE), "
-                                "or 'tilted' (TiltedVAE with an exponentially tilted prior)")
+    parser.add_argument("--model", type=str, default="vae",
+                        choices=["vae", "tilted"],
+                    help="Which model to train: 'vae' (standard VAE), "
+                            "or 'tilted' (TiltedVAE with an exponentially tilted prior)")
     parser.add_argument("--in_channels", type=int, default=3)
     parser.add_argument("--latent_dim", type=int, default=128)
     parser.add_argument("--tau", type=float, default=None,
