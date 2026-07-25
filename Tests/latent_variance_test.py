@@ -3,10 +3,8 @@
 This script samples a random number of images from the dataset, encodes them
 with a VAE-family model, and reports the variance of each latent dimension.
 
-Examples:
 python TiltedVAEMyzus/Tests/latent_variance_test.py --data_dir DATA/Train --model vae --latent_dim 128
-python TiltedVAEMyzus/Tests/latent_variance_test.py --data_dir DATA/Train --model tilted --latent_dim 128
-"""
+python TiltedVAEMyzus/Tests/latent_variance_test.py --data_dir DATA/Train --model tilted --latent_dim 128 --embeddings TiltedVAEMyzus/Tests/efficacy500_classifier/tiltedvae/128/embeddings_100ppm.pt
 
 import argparse
 import os
@@ -141,19 +139,46 @@ def load_embeddings(path: str) -> torch.Tensor:
             arr = data[first_key]
         emb = torch.from_numpy(arr)
     elif ext in {".pt", ".pth"}:
-        obj = torch.load(path, map_location="cpu")
-        if isinstance(obj, torch.Tensor):
-            emb = obj
-        elif isinstance(obj, dict):
-            if "embeddings" in obj and isinstance(obj["embeddings"], torch.Tensor):
-                emb = obj["embeddings"]
-            else:
-                first_tensor_key = next((k for k, v in obj.items() if isinstance(v, torch.Tensor)), None)
-                if first_tensor_key is None:
-                    raise RuntimeError("No tensor found in .pt/.pth file")
-                emb = obj[first_tensor_key]
-        else:
-            raise RuntimeError("Unsupported .pt/.pth structure for embeddings")
+        obj = torch.load(path, map_location="cpu", weights_only=False)
+
+        rows = []
+
+        def _collect_tensors(node):
+            if isinstance(node, torch.Tensor):
+                t = node.detach().cpu().float()
+                if t.ndim == 1:
+                    rows.append(t.unsqueeze(0))
+                elif t.ndim == 2:
+                    rows.append(t)
+                return
+
+            if isinstance(node, np.ndarray):
+                t = torch.from_numpy(node).detach().cpu().float()
+                if t.ndim == 1:
+                    rows.append(t.unsqueeze(0))
+                elif t.ndim == 2:
+                    rows.append(t)
+                return
+
+            if isinstance(node, dict):
+                for value in node.values():
+                    _collect_tensors(value)
+                return
+
+            if isinstance(node, (list, tuple)):
+                for item in node:
+                    _collect_tensors(item)
+
+        _collect_tensors(obj)
+
+        if not rows:
+            raise RuntimeError("No embedding tensors found in .pt/.pth file")
+
+        dims = {row.shape[1] for row in rows}
+        if len(dims) != 1:
+            raise RuntimeError(f"Inconsistent embedding dimensions found in file: {sorted(dims)}")
+
+        emb = torch.cat(rows, dim=0)
     else:
         raise RuntimeError("Unsupported embeddings file extension. Use .npy/.npz/.pt/.pth")
 
