@@ -35,10 +35,10 @@ def parse_args() -> argparse.Namespace:
                              "validation fast on very large datasets")
 
     # Model
-        parser.add_argument("--model", type=str, default="vae",
-                            choices=["vae", "tilted"],
+    parser.add_argument("--model", type=str, default="vae",
+                        choices=["vae", "tilted"],
                         help="Which model to train: 'vae' (standard VAE), "
-                                "or 'tilted' (TiltedVAE with an exponentially tilted prior)")
+                             "or 'tilted' (TiltedVAE with an exponentially tilted prior)")
     parser.add_argument("--in_channels", type=int, default=3)
     parser.add_argument("--latent_dim", type=int, default=128)
     parser.add_argument("--tau", type=float, default=None,
@@ -60,6 +60,10 @@ def parse_args() -> argparse.Namespace:
                         help="Posterior-mean variance threshold for counting active units (AU)")
     parser.add_argument("--scheduler_gamma", type=float, default=0.95)
     parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--weak_sigreg_weight", type=float, default=0.0,
+                        help="Weight for Weak-SIGReg covariance regularization (0 disables it)")
+    parser.add_argument("--weak_sigreg_sketch_dim", type=int, default=64,
+                        help="Sketch dimension used by Weak-SIGReg covariance regularization")
 
     # Trainer / hardware
     parser.add_argument("--accelerator", type=str, default="auto")
@@ -174,6 +178,8 @@ def main() -> None:
         anneal_k=args.anneal_k,
         anneal_x0=args.anneal_x0,
         au_threshold=args.au_threshold,
+        weak_sigreg_weight=args.weak_sigreg_weight,
+        weak_sigreg_sketch_dim=args.weak_sigreg_sketch_dim,
     )
 
     # Logger (Weights & Biases)
