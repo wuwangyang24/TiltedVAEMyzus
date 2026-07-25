@@ -34,7 +34,7 @@ Output .pt file structure (dict):
     }
 
 Usage (VAE/TiltedVAE):
-python TiltedVAEMyzus/Tests/efficacy500_classifier/encode_embeddings.py --metadata METADATA/metadata_compound_all20ppm.json --root_dir DATA_TEST/ --output TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_20ppm.pt --checkpoint TiltedVAEMyzus/results/checkpoints/tilted-latent128_kl0.001_bestsofar/best_balanced_acc.ckpt --model tilted --latent_dim 128 --img_size 96 --device cpu
+python TiltedVAEMyzus/Tests/efficacy500_classifier/encode_embeddings.py --metadata METADATA/metadata_compound_all100ppm.json --root_dir DATA_TEST/ --output TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_100ppm.pt --checkpoint TiltedVAEMyzus/results/checkpoints/tilted-latent256_kld0.01/best_balanced_acc.ckpt --model tilted --latent_dim 256 --img_size 96 --device cpu
 
 Usage (DINOv2 pretrained):
 python TiltedVAEMyzus/Tests/efficacy500_classifier/encode_embeddings.py --metadata METADATA/metadata_compound_all20ppm.json --root_dir DATA_TEST/ --output TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_dino_20ppm.pt --model dino --device cpu
