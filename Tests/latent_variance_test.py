@@ -11,6 +11,7 @@ import argparse
 import os
 import sys
 
+import matplotlib.pyplot as plt
 import numpy as np
 
 import torch
@@ -52,6 +53,10 @@ def parse_args() -> argparse.Namespace:
                         help="Maximum random sample size")
     parser.add_argument("--seed", type=int, default=123,
                         help="Random seed for image sampling")
+    parser.add_argument("--output_dir", type=str, default="results/latent_variance",
+                        help="Directory to save latent-variance plots")
+    parser.add_argument("--hist_bins", type=int, default=20,
+                        help="Number of bins for variance histogram")
     return parser.parse_args()
 
 
@@ -189,6 +194,46 @@ def load_embeddings(path: str) -> torch.Tensor:
     return emb.float().cpu()
 
 
+def save_variance_plots(var_per_dim: torch.Tensor,
+                        args: argparse.Namespace,
+                        source_tag: str) -> None:
+    """Save histogram and per-dimension plots for latent variances."""
+    os.makedirs(args.output_dir, exist_ok=True)
+    var_np = var_per_dim.cpu().numpy()
+
+    # Histogram of variances across latent dimensions.
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.hist(var_np, bins=args.hist_bins, color="#1f77b4", edgecolor="black", alpha=0.85)
+    ax.axvline(var_np.mean(), color="red", linestyle="--", linewidth=1.5,
+               label=f"mean={var_np.mean():.4f}")
+    ax.set_title(f"Latent Variance Histogram ({source_tag})")
+    ax.set_xlabel("Per-dimension variance")
+    ax.set_ylabel("Count")
+    ax.legend()
+    fig.tight_layout()
+    hist_path = os.path.join(args.output_dir, f"latent_variance_hist_{source_tag}.png")
+    fig.savefig(hist_path, dpi=180)
+    plt.close(fig)
+
+    # Variance value for each latent dimension index.
+    fig, ax = plt.subplots(figsize=(10, 5))
+    x = np.arange(var_np.shape[0])
+    ax.bar(x, var_np, color="#4c78a8", width=0.85)
+    ax.axhline(var_np.mean(), color="red", linestyle="--", linewidth=1.5,
+               label=f"mean={var_np.mean():.4f}")
+    ax.set_title(f"Per-Dimension Latent Variance ({source_tag})")
+    ax.set_xlabel("Latent dimension")
+    ax.set_ylabel("Variance")
+    ax.legend()
+    fig.tight_layout()
+    bar_path = os.path.join(args.output_dir, f"latent_variance_per_dim_{source_tag}.png")
+    fig.savefig(bar_path, dpi=180)
+    plt.close(fig)
+
+    print(f"[latent_var] saved_hist={hist_path}")
+    print(f"[latent_var] saved_per_dim_plot={bar_path}")
+
+
 def main() -> None:
     args = parse_args()
 
@@ -205,6 +250,7 @@ def main() -> None:
         raise FileNotFoundError(f"Embeddings file does not exist: {args.embeddings}")
 
     sampled_images = None
+    source_tag = "embeddings" if args.embeddings else "sampled_images"
     if args.embeddings:
         mu = load_embeddings(args.embeddings)
     else:
@@ -253,6 +299,7 @@ def main() -> None:
     print(f"[latent_var] max_variance={var_per_dim.max().item():.6f}")
     print("[latent_var] per_dim_variance=")
     print(var_per_dim.cpu().numpy())
+    save_variance_plots(var_per_dim, args, source_tag=source_tag)
 
 
 if __name__ == "__main__":
