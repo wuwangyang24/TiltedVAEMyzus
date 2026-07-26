@@ -1,0 +1,1 @@
+python train.py --model dino_lora --contrastive_metadata metadata.json --contrastive_labels labels.csv --contrastive_root_dir /path/to/images --contrastive_classes_per_batch 16 --contrastive_samples_per_class 8   # -> batch of 128, 16 programs x 8 images

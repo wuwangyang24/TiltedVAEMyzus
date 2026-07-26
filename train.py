@@ -92,6 +92,15 @@ def parse_args() -> argparse.Namespace:
                         help="Keep only compounds with Efficacy >= this value")
     parser.add_argument("--contrastive_use_control", action="store_true",
                         help="Also include per-plate control images as training samples")
+    parser.add_argument("--contrastive_classes_per_batch", type=int, default=0,
+                        help="P for class-balanced P x K sampling: distinct synthesis "
+                             "programs per batch. When > 0 (with "
+                             "--contrastive_samples_per_class), guarantees positives and "
+                             "negatives in every batch; effective batch size = P * K "
+                             "(overrides --batch_size for training).")
+    parser.add_argument("--contrastive_samples_per_class", type=int, default=0,
+                        help="K for class-balanced P x K sampling: images per synthesis "
+                             "program per batch.")
 
     # Optimization
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -224,6 +233,8 @@ def main() -> None:
             min_compounds_per_class=args.contrastive_min_per_class,
             filter_by_efficacy=args.contrastive_filter_efficacy,
             use_control=args.contrastive_use_control,
+            classes_per_batch=args.contrastive_classes_per_batch,
+            samples_per_class=args.contrastive_samples_per_class,
             seed=args.seed,
         )
 

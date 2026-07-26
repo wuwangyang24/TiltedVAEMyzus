@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Sampler
 import pytorch_lightning as pl
 import torchvision.transforms as T
 from torchvision.io import ImageReadMode, read_image
@@ -170,6 +170,67 @@ class VAEDataModule(pl.LightningDataModule):
         )
 
 
+class PKBatchSampler(Sampler):
+    """Class-balanced (P x K) batch sampler for supervised contrastive training.
+
+    Each yielded batch contains ``classes_per_batch`` (P) distinct synthesis
+    programs with ``samples_per_class`` (K) images each, so every batch is
+    guaranteed to hold multiple positives per program (same class) and multiple
+    negatives (different classes). The effective batch size is ``P * K``.
+
+    Classes with fewer than K samples are sampled with replacement. The number
+    of batches per epoch defaults to ``len(labels) // (P * K)``.
+    """
+
+    def __init__(self, labels: List[int], classes_per_batch: int,
+                 samples_per_class: int, num_batches: Optional[int] = None,
+                 seed: int = 0) -> None:
+        super().__init__(None)
+        self.labels = np.asarray(labels)
+        self.samples_per_class = samples_per_class
+        self.seed = seed
+        self._epoch = 0
+
+        self.label_to_indices: Dict[int, np.ndarray] = {}
+        for idx, lab in enumerate(self.labels):
+            self.label_to_indices.setdefault(int(lab), []).append(idx)
+        self.label_to_indices = {
+            lab: np.asarray(idxs) for lab, idxs in self.label_to_indices.items()
+        }
+        self.unique_labels = list(self.label_to_indices.keys())
+
+        # Can't draw more distinct classes than exist.
+        self.classes_per_batch = min(classes_per_batch, len(self.unique_labels))
+        if self.classes_per_batch < 2:
+            raise ValueError(
+                "PKBatchSampler needs at least 2 synthesis programs to form "
+                f"contrastive batches, found {len(self.unique_labels)}."
+            )
+
+        batch_size = self.classes_per_batch * self.samples_per_class
+        if num_batches is None:
+            num_batches = len(self.labels) // batch_size
+        self.num_batches = max(1, num_batches)
+
+    def __len__(self) -> int:
+        return self.num_batches
+
+    def __iter__(self):
+        # Vary the shuffle each epoch while staying reproducible.
+        rng = np.random.default_rng(self.seed + self._epoch)
+        self._epoch += 1
+        for _ in range(self.num_batches):
+            chosen = rng.choice(
+                self.unique_labels, size=self.classes_per_batch, replace=False)
+            batch: List[int] = []
+            for lab in chosen:
+                idxs = self.label_to_indices[int(lab)]
+                replace = len(idxs) < self.samples_per_class
+                picked = rng.choice(idxs, size=self.samples_per_class, replace=replace)
+                batch.extend(int(i) for i in picked)
+            yield batch
+
+
 class ContrastiveImageDataset(Dataset):
     """Loads RGB images labelled by synthesis program for contrastive training.
 
@@ -213,6 +274,10 @@ class ContrastiveDataModule(pl.LightningDataModule):
         filter_by_efficacy: keep only compounds with ``Efficacy`` >= this value
             (ignored if the column is absent or the value is 0/None).
         use_control: also include per-plate control images as training samples.
+        classes_per_batch: P for P x K class-balanced sampling. When > 0 (with
+            ``samples_per_class`` > 0), each train batch holds this many distinct
+            synthesis programs, guaranteeing positives and negatives per batch.
+        samples_per_class: K images per program for P x K sampling.
         seed: RNG seed for the train/val split.
     """
 
@@ -229,6 +294,8 @@ class ContrastiveDataModule(pl.LightningDataModule):
                  min_compounds_per_class: int = 2,
                  filter_by_efficacy: Optional[float] = 0,
                  use_control: bool = False,
+                 classes_per_batch: int = 0,
+                 samples_per_class: int = 0,
                  seed: int = 42) -> None:
         super().__init__()
         self.image_metadata_json = image_metadata_json
@@ -243,15 +310,22 @@ class ContrastiveDataModule(pl.LightningDataModule):
         self.min_compounds_per_class = min_compounds_per_class
         self.filter_by_efficacy = filter_by_efficacy
         self.use_control = use_control
+        self.classes_per_batch = classes_per_batch
+        self.samples_per_class = samples_per_class
         self.seed = seed
 
         self.classes: List[str] = []
+        self._train_labels: List[int] = []
         self.train_dataset: Optional[Dataset] = None
         self.val_dataset: Optional[Dataset] = None
 
     @property
     def num_classes(self) -> int:
         return len(self.classes)
+
+    @property
+    def use_pk_sampler(self) -> bool:
+        return self.classes_per_batch > 0 and self.samples_per_class > 0
 
     def _build_transform(self) -> T.Compose:
         return T.Compose([
@@ -335,6 +409,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
         transform = self._build_transform()
         self.train_dataset = ContrastiveImageDataset(train_samples, transform)
         self.val_dataset = ContrastiveImageDataset(val_samples, transform)
+        self._train_labels = [label for _, label in train_samples]
         print(
             f"[ContrastiveDataModule] {len(samples)} images, "
             f"{self.num_classes} synthesis programs "
@@ -342,6 +417,22 @@ class ContrastiveDataModule(pl.LightningDataModule):
         )
 
     def train_dataloader(self) -> DataLoader:
+        # Class-balanced P x K sampling guarantees positives and negatives per
+        # batch; falls back to plain random shuffling when disabled.
+        if self.use_pk_sampler:
+            batch_sampler = PKBatchSampler(
+                labels=self._train_labels,
+                classes_per_batch=self.classes_per_batch,
+                samples_per_class=self.samples_per_class,
+                seed=self.seed,
+            )
+            return DataLoader(
+                self.train_dataset,
+                batch_sampler=batch_sampler,
+                num_workers=self.num_workers,
+                pin_memory=True,
+                persistent_workers=self.num_workers > 0,
+            )
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
