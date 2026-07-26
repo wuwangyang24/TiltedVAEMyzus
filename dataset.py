@@ -1,12 +1,18 @@
+import json
 import os
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
 import pytorch_lightning as pl
 import torchvision.transforms as T
 from torchvision.io import ImageReadMode, read_image
+
+# DINOv2 was pretrained with ImageNet normalization statistics.
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
 
 # Common raster image extensions to pick up when walking the dataset folder.
 IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp")
@@ -140,6 +146,200 @@ class VAEDataModule(pl.LightningDataModule):
         transform = self._build_transform()
         self.train_dataset = ImageFolderFlat(train_paths, transform, self.in_channels)
         self.val_dataset = ImageFolderFlat(val_paths, transform, self.in_channels)
+
+    def train_dataloader(self) -> DataLoader:
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            drop_last=True,
+            persistent_workers=self.num_workers > 0,
+        )
+
+    def val_dataloader(self) -> DataLoader:
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            drop_last=False,
+            persistent_workers=self.num_workers > 0,
+        )
+
+
+class ContrastiveImageDataset(Dataset):
+    """Loads RGB images labelled by synthesis program for contrastive training.
+
+    Each item is ``(image_tensor, label_idx)`` where ``label_idx`` is the
+    integer-encoded synthesis-program class. Images are resized, scaled to
+    ``[0, 1]``, and normalized with ImageNet statistics (matching DINOv2).
+    """
+
+    def __init__(self, samples: List[Tuple[str, int]], transform: T.Compose) -> None:
+        self.samples = samples
+        self.transform = transform
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, int]:
+        path, label = self.samples[index]
+        img = read_image(path, mode=ImageReadMode.RGB)
+        return self.transform(img), label
+
+
+class ContrastiveDataModule(pl.LightningDataModule):
+    """LightningDataModule serving synthesis-program-labelled images for
+    supervised contrastive (InfoNCE / SupCon) training of the DINOv2+LoRA model.
+
+    Labels are derived by joining an image-metadata JSON (compound -> plates ->
+    image paths, same format as the classifier callback) with a label CSV/Excel
+    mapping each compound to a ``synthesis_program`` class.
+
+    Args:
+        image_metadata_json: JSON mapping compounds to plate/image paths.
+        label_metadata_csv: CSV/Excel with compound -> synthesis-program labels.
+        root_dir: base directory prepended to the relative image paths.
+        img_size: square image size (must be a multiple of the DINOv2 patch, 14).
+        batch_size: mini-batch size for both loaders.
+        num_workers: DataLoader worker processes.
+        val_split: fraction of images held out for validation.
+        compound_col: compound-ID column in the label CSV.
+        label_col: synthesis-program column in the label CSV.
+        min_compounds_per_class: drop classes with fewer distinct compounds.
+        filter_by_efficacy: keep only compounds with ``Efficacy`` >= this value
+            (ignored if the column is absent or the value is 0/None).
+        use_control: also include per-plate control images as training samples.
+        seed: RNG seed for the train/val split.
+    """
+
+    def __init__(self,
+                 image_metadata_json: str,
+                 label_metadata_csv: str,
+                 root_dir: str,
+                 img_size: int = 224,
+                 batch_size: int = 64,
+                 num_workers: int = 4,
+                 val_split: float = 0.1,
+                 compound_col: str = "compound",
+                 label_col: str = "synthesis_program",
+                 min_compounds_per_class: int = 2,
+                 filter_by_efficacy: Optional[float] = 0,
+                 use_control: bool = False,
+                 seed: int = 42) -> None:
+        super().__init__()
+        self.image_metadata_json = image_metadata_json
+        self.label_metadata_csv = label_metadata_csv
+        self.root_dir = root_dir
+        self.img_size = img_size
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.val_split = val_split
+        self.compound_col = compound_col
+        self.label_col = label_col
+        self.min_compounds_per_class = min_compounds_per_class
+        self.filter_by_efficacy = filter_by_efficacy
+        self.use_control = use_control
+        self.seed = seed
+
+        self.classes: List[str] = []
+        self.train_dataset: Optional[Dataset] = None
+        self.val_dataset: Optional[Dataset] = None
+
+    @property
+    def num_classes(self) -> int:
+        return len(self.classes)
+
+    def _build_transform(self) -> T.Compose:
+        return T.Compose([
+            T.Resize((self.img_size, self.img_size), antialias=True),
+            T.ConvertImageDtype(torch.float32),
+            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        ])
+
+    def _load_compound_labels(self) -> Dict[str, str]:
+        """Return a {compound_id: synthesis_program} map, after optional
+        efficacy filtering and dropping classes with too few compounds."""
+        suffix = os.path.splitext(self.label_metadata_csv)[1].lower()
+        if suffix in {".xlsx", ".xls"}:
+            df = pd.read_excel(self.label_metadata_csv)
+        else:
+            df = pd.read_csv(self.label_metadata_csv)
+
+        if (self.filter_by_efficacy and self.filter_by_efficacy > 0
+                and "Efficacy" in df.columns):
+            df = df[df["Efficacy"] >= self.filter_by_efficacy]
+
+        df = df[[self.compound_col, self.label_col]].dropna()
+        df[self.compound_col] = df[self.compound_col].astype(str)
+        df[self.label_col] = df[self.label_col].astype(str)
+
+        # Drop classes with fewer than the required number of distinct compounds.
+        min_cpc = max(self.min_compounds_per_class, 2)
+        counts = df.groupby(self.label_col)[self.compound_col].nunique()
+        valid_classes = set(counts[counts >= min_cpc].index)
+        df = df[df[self.label_col].isin(valid_classes)]
+
+        return dict(zip(df[self.compound_col], df[self.label_col]))
+
+    def _build_samples(self) -> List[Tuple[str, int]]:
+        with open(self.image_metadata_json) as f:
+            metadata = json.load(f)
+
+        comp2label = self._load_compound_labels()
+        if not comp2label:
+            raise RuntimeError(
+                "No compounds with valid synthesis-program labels remained after "
+                "filtering. Check --contrastive_labels / --contrastive_min_per_class."
+            )
+
+        self.classes = sorted(set(comp2label.values()))
+        label2idx = {c: i for i, c in enumerate(self.classes)}
+
+        subsets = ("treated", "control") if self.use_control else ("treated",)
+        samples: List[Tuple[str, int]] = []
+        for entry in metadata:
+            cid = str(entry["Compound"])
+            if cid not in comp2label:
+                continue
+            label_idx = label2idx[comp2label[cid]]
+            for plate_id, plate_data in entry.items():
+                if plate_id == "Compound":
+                    continue
+                for subset in subsets:
+                    for rel in plate_data.get(subset, []):
+                        samples.append((os.path.join(self.root_dir, rel), label_idx))
+
+        if not samples:
+            raise RuntimeError(
+                "No labelled images found. Check --contrastive_metadata / "
+                "--contrastive_root_dir and the compound-ID join."
+            )
+        return samples
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        samples = self._build_samples()
+
+        rng = np.random.default_rng(self.seed)
+        indices = rng.permutation(len(samples))
+        n_val = int(len(samples) * self.val_split)
+        val_idx = indices[:n_val]
+        train_idx = indices[n_val:]
+
+        train_samples = [samples[i] for i in train_idx]
+        val_samples = [samples[i] for i in val_idx]
+
+        transform = self._build_transform()
+        self.train_dataset = ContrastiveImageDataset(train_samples, transform)
+        self.val_dataset = ContrastiveImageDataset(val_samples, transform)
+        print(
+            f"[ContrastiveDataModule] {len(samples)} images, "
+            f"{self.num_classes} synthesis programs "
+            f"(train={len(train_samples)}, val={len(val_samples)})"
+        )
 
     def train_dataloader(self) -> DataLoader:
         return DataLoader(

@@ -6,9 +6,10 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
-from Models import VAE, TiltedVAE
-from dataset import VAEDataModule
+from Models import VAE, TiltedVAE, DinoV2LoRA
+from dataset import VAEDataModule, ContrastiveDataModule
 from experiment import VAEExperiment
+from contrastive_experiment import ContrastiveExperiment
 from Tests.chemical_class_classifier.classifier_callback import ChemicalClassClassifierCallback
 
 # Use file-system based tensor sharing to avoid /dev/shm exhaustion, which
@@ -21,8 +22,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a Convolutional VAE with PyTorch Lightning + W&B")
 
     # Data
-    parser.add_argument("--data_dir", type=str, required=True,
-                        help="Path to the image dataset (any nested folder layout)")
+    parser.add_argument("--data_dir", type=str, default=None,
+                        help="Path to the image dataset (any nested folder layout). "
+                             "Required for the VAE models; ignored for --model dino_lora, "
+                             "which uses --contrastive_metadata instead.")
     parser.add_argument("--img_size", type=int, default=96, help="Square image size")
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--num_workers", type=int, default=4)
@@ -36,14 +39,59 @@ def parse_args() -> argparse.Namespace:
 
     # Model
     parser.add_argument("--model", type=str, default="vae",
-                        choices=["vae", "tilted"],
+                        choices=["vae", "tilted", "dino_lora"],
                         help="Which model to train: 'vae' (standard VAE), "
-                             "or 'tilted' (TiltedVAE with an exponentially tilted prior)")
+                             "'tilted' (TiltedVAE with an exponentially tilted prior), "
+                             "or 'dino_lora' (LoRA-adapted DINOv2 trained with a "
+                             "supervised InfoNCE/SupCon loss over synthesis programs)")
     parser.add_argument("--in_channels", type=int, default=3)
     parser.add_argument("--latent_dim", type=int, default=128)
     parser.add_argument("--tau", type=float, default=None,
                         help="Tilt parameter for the TiltedVAE prior (only used when "
                              "--model tilted). Defaults to sqrt(2 * latent_dim)")
+
+    # DINOv2 + LoRA contrastive model (only used when --model dino_lora)
+    parser.add_argument("--dino_backbone", type=str, default="vit_small_patch14_dinov2",
+                        choices=["vit_small_patch14_dinov2",
+                                 "vit_base_patch14_dinov2",
+                                 "vit_large_patch14_dinov2"],
+                        help="DINOv2 backbone variant to adapt with LoRA")
+    parser.add_argument("--embedding_dim", type=int, default=256,
+                        help="Projected embedding dimension for the contrastive head")
+    parser.add_argument("--proj_hidden_dim", type=int, default=2048,
+                        help="Hidden width of the 2-layer projection MLP")
+    parser.add_argument("--lora_rank", type=int, default=8, help="LoRA rank")
+    parser.add_argument("--lora_alpha", type=int, default=16, help="LoRA scaling alpha")
+    parser.add_argument("--lora_dropout", type=float, default=0.0,
+                        help="Dropout applied to the LoRA input")
+    parser.add_argument("--lora_targets", type=str, nargs="*", default=["qkv"],
+                        help="Leaf module names in the backbone to adapt with LoRA "
+                             "(e.g. qkv proj)")
+    parser.add_argument("--temperature", type=float, default=0.1,
+                        help="Softmax temperature for the InfoNCE/SupCon loss")
+
+    # Contrastive dataset (synthesis-program labels; only used when --model dino_lora)
+    parser.add_argument("--contrastive_metadata", type=str, default=None,
+                        help="JSON metadata (compounds -> plates -> image paths) for "
+                             "the contrastive dataset. Required for --model dino_lora.")
+    parser.add_argument("--contrastive_labels", type=str, default=None,
+                        help="CSV/Excel mapping compounds to synthesis-program labels. "
+                             "Required for --model dino_lora.")
+    parser.add_argument("--contrastive_root_dir", type=str, default=None,
+                        help="Root directory prepended to image paths in the JSON. "
+                             "Required for --model dino_lora.")
+    parser.add_argument("--contrastive_compound_col", type=str, default="compound",
+                        help="Compound-ID column in the label CSV. Default: compound")
+    parser.add_argument("--contrastive_label_col", type=str, default="synthesis_program",
+                        help="Synthesis-program column in the label CSV. "
+                             "Default: synthesis_program")
+    parser.add_argument("--contrastive_min_per_class", type=int, default=2,
+                        help="Drop synthesis programs with fewer distinct compounds. "
+                             "Default: 2")
+    parser.add_argument("--contrastive_filter_efficacy", type=float, default=0,
+                        help="Keep only compounds with Efficacy >= this value")
+    parser.add_argument("--contrastive_use_control", action="store_true",
+                        help="Also include per-plate control images as training samples")
 
     # Optimization
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -142,45 +190,104 @@ def main() -> None:
     if not args.deterministic:
         torch.backends.cudnn.benchmark = True
 
-    # Data
-    datamodule = VAEDataModule(
-        data_dir=args.data_dir,
-        img_size=args.img_size,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        val_split=args.val_split,
-        index_cache=args.index_cache,
-        max_val_samples=args.max_val_samples,
-    )
+    is_dino = args.model == "dino_lora"
 
-    # Model
-    if args.model == "tilted":
-        model = TiltedVAE(
-            in_channels=args.in_channels,
-            latent_dim=args.latent_dim,
-            tau=args.tau,
+    if is_dino:
+        # DINOv2 expects 3-channel, patch14-compatible inputs. Force a valid
+        # image size (multiple of 14) and RGB regardless of the VAE defaults.
+        if args.img_size % 14 != 0:
+            args.img_size = 224
+            print(f"[dino_lora] img_size must be a multiple of 14; using {args.img_size}")
+        args.in_channels = 3
+
+        missing = [name for name, val in (
+            ("--contrastive_metadata", args.contrastive_metadata),
+            ("--contrastive_labels", args.contrastive_labels),
+            ("--contrastive_root_dir", args.contrastive_root_dir),
+        ) if not val]
+        if missing:
+            raise ValueError(
+                f"--model dino_lora requires {', '.join(missing)} to build the "
+                "synthesis-program-labelled contrastive dataset."
+            )
+
+        datamodule = ContrastiveDataModule(
+            image_metadata_json=args.contrastive_metadata,
+            label_metadata_csv=args.contrastive_labels,
+            root_dir=args.contrastive_root_dir,
             img_size=args.img_size,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            val_split=args.val_split,
+            compound_col=args.contrastive_compound_col,
+            label_col=args.contrastive_label_col,
+            min_compounds_per_class=args.contrastive_min_per_class,
+            filter_by_efficacy=args.contrastive_filter_efficacy,
+            use_control=args.contrastive_use_control,
+            seed=args.seed,
+        )
+
+        model = DinoV2LoRA(
+            backbone=args.dino_backbone,
+            img_size=args.img_size,
+            embedding_dim=args.embedding_dim,
+            proj_hidden_dim=args.proj_hidden_dim,
+            lora_rank=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            lora_targets=args.lora_targets,
+            temperature=args.temperature,
+        )
+
+        experiment = ContrastiveExperiment(
+            model=model,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            temperature=args.temperature,
+            scheduler_gamma=args.scheduler_gamma,
         )
     else:
-        model = VAE(
-            in_channels=args.in_channels,
-            latent_dim=args.latent_dim,
+        if not args.data_dir:
+            raise ValueError(f"--data_dir is required for --model {args.model}.")
+        # Data
+        datamodule = VAEDataModule(
+            data_dir=args.data_dir,
             img_size=args.img_size,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            val_split=args.val_split,
+            index_cache=args.index_cache,
+            max_val_samples=args.max_val_samples,
         )
 
-    experiment = VAEExperiment(
-        model=model,
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        kld_weight=args.kld_weight,
-        scheduler_gamma=args.scheduler_gamma,
-        anneal_kld=args.anneal_kld,
-        anneal_k=args.anneal_k,
-        anneal_x0=args.anneal_x0,
-        au_threshold=args.au_threshold,
-        weak_sigreg_weight=args.weak_sigreg_weight,
-        weak_sigreg_sketch_dim=args.weak_sigreg_sketch_dim,
-    )
+        # Model
+        if args.model == "tilted":
+            model = TiltedVAE(
+                in_channels=args.in_channels,
+                latent_dim=args.latent_dim,
+                tau=args.tau,
+                img_size=args.img_size,
+            )
+        else:
+            model = VAE(
+                in_channels=args.in_channels,
+                latent_dim=args.latent_dim,
+                img_size=args.img_size,
+            )
+
+        experiment = VAEExperiment(
+            model=model,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            kld_weight=args.kld_weight,
+            scheduler_gamma=args.scheduler_gamma,
+            anneal_kld=args.anneal_kld,
+            anneal_k=args.anneal_k,
+            anneal_x0=args.anneal_x0,
+            au_threshold=args.au_threshold,
+            weak_sigreg_weight=args.weak_sigreg_weight,
+            weak_sigreg_sketch_dim=args.weak_sigreg_sketch_dim,
+        )
 
     # Logger (Weights & Biases)
     wandb_logger = WandbLogger(
@@ -194,9 +301,13 @@ def main() -> None:
     wandb_logger.log_hyperparams(vars(args))
 
     # Callbacks
-    ckpt_suffix = f"{args.model}-latent{args.latent_dim}-kld{args.kld_weight}"
-    if args.weak_sigreg_weight > 0:
-        ckpt_suffix += f"-weaksigreg{args.weak_sigreg_weight}"
+    if is_dino:
+        ckpt_suffix = (f"{args.model}-{args.dino_backbone}-r{args.lora_rank}"
+                       f"-emb{args.embedding_dim}-t{args.temperature}")
+    else:
+        ckpt_suffix = f"{args.model}-latent{args.latent_dim}-kld{args.kld_weight}"
+        if args.weak_sigreg_weight > 0:
+            ckpt_suffix += f"-weaksigreg{args.weak_sigreg_weight}"
     ckpt_dir = os.path.join(args.output_dir, "checkpoints", ckpt_suffix)
     checkpoint_callback = ModelCheckpoint(
         dirpath=ckpt_dir,
@@ -210,8 +321,9 @@ def main() -> None:
 
     callbacks = [checkpoint_callback, lr_monitor]
 
-    # Optional: chemical-class classifier callback
-    if args.cls_image_metadata and args.cls_label_metadata and args.cls_root_dir:
+    # Optional: chemical-class classifier callback (VAE-family models only)
+    if (not is_dino and args.cls_image_metadata and args.cls_label_metadata
+            and args.cls_root_dir):
         cls_callback = ChemicalClassClassifierCallback(
             image_metadata_json=args.cls_image_metadata,
             label_metadata_csv=args.cls_label_metadata,
