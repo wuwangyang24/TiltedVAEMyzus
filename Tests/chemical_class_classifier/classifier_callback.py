@@ -430,33 +430,148 @@ class ChemicalClassClassifierCallback(pl.Callback):
             return
 
         # ── Build features and train classifier ──────────────────────────────
+        # Evaluate BOTH variants simultaneously: without control subtraction
+        # (raw treated means) and with per-plate control subtraction. This lets
+        # us compare how much the control-subtraction step helps class
+        # separability at every evaluation epoch.
         str2idx, classes = build_label_encoder(self._df[self.label_col])
+
+        variants = [
+            (False, "cls_test/nosub_", "no control subtraction"),
+            (True, "cls_test/ctrl_", "control subtracted"),
+        ]
+
+        all_metrics: Dict[str, float] = {}
+        wandb_images: Dict[str, object] = {}
+        results_by_flag: Dict[bool, Dict] = {}
+
+        for subtract_flag, prefix, desc in variants:
+            res = self._evaluate_classifier_variant(
+                embeddings=embeddings,
+                str2idx=str2idx,
+                classes=classes,
+                subtract_control=subtract_flag,
+                current_epoch=current_epoch,
+                variant_desc=desc,
+                variant_tag=prefix.split("/")[-1].rstrip("_"),
+            )
+            if res is None:
+                continue
+            results_by_flag[subtract_flag] = res
+            for name, val in res["bare_metrics"].items():
+                all_metrics[prefix + name] = val
+            if res["fig"] is not None:
+                wandb_images[prefix + "confusion_matrix"] = res["fig"]
+
+        if not results_by_flag:
+            return
+
+        # ── Backward-compatible `cls_test/` metrics mirror the configured
+        #    self.subtract_control variant (falls back to any available one). ──
+        primary = results_by_flag.get(
+            self.subtract_control, next(iter(results_by_flag.values()))
+        )
+        for name, val in primary["bare_metrics"].items():
+            all_metrics["cls_test/" + name] = val
+
+        # ── Log metrics + confusion matrices to W&B ──────────────────────────
+        # Use wandb.log() directly — trainer.logger.log_metrics() buffers
+        # internally and may never flush when called from a callback in
+        # Lightning 2.x.
+        try:
+            import wandb
+            if trainer.logger is not None and hasattr(trainer.logger, "experiment"):
+                experiment = trainer.logger.experiment
+                if experiment is not None:
+                    log_payload = dict(all_metrics)
+                    for key, fig in wandb_images.items():
+                        log_payload[key] = wandb.Image(fig)
+                    experiment.log(log_payload, commit=True)
+        except (ImportError, AttributeError) as e:
+            print(f"  [ClassifierCallback] W&B logging failed: {e}", flush=True)
+
+        for res in results_by_flag.values():
+            if res["fig"] is not None:
+                plt.close(res["fig"])
+
+        for subtract_flag, prefix, desc in variants:
+            res = results_by_flag.get(subtract_flag)
+            if res is None:
+                continue
+            m = res["bare_metrics"]
+            print(
+                f"\n  [ClassifierCallback] Epoch {current_epoch} ({desc}): "
+                f"top1_acc={m['top1_accuracy']:.3f}  "
+                f"balanced_acc={m['balanced_accuracy']:.3f}  "
+                f"weighted_f1={m['weighted_f1']:.3f}  "
+                f"({int(m['num_classes'])} classes, {int(m['num_compounds'])} compounds)"
+                f"  | confusion matrix -> {res['cm_path']}",
+                flush=True,
+            )
+        print("", flush=True)
+
+        # ── Save best checkpoint by balanced accuracy (primary variant) ──────
+        balanced_acc = primary["bare_metrics"]["balanced_accuracy"]
+        if balanced_acc > self._best_balanced_acc:
+            self._best_balanced_acc = balanced_acc
+            ckpt_dir = self.output_dir / "checkpoints" / self.ckpt_subdir
+            ckpt_dir.mkdir(parents=True, exist_ok=True)
+            ckpt_path = ckpt_dir / "best_balanced_acc.ckpt"
+            trainer.save_checkpoint(str(ckpt_path))
+            emb_path = ckpt_dir / "embeddings_best_balanced_acc.pt"
+            torch.save(embeddings, emb_path)
+            print(
+                f"  [ClassifierCallback] New best balanced_acc={balanced_acc:.3f} "
+                f"— saved checkpoint to {ckpt_path}\n"
+                f"  [ClassifierCallback] Saved embeddings to {emb_path}\n",
+                flush=True,
+            )
+
+    def _evaluate_classifier_variant(
+        self,
+        embeddings: Dict,
+        str2idx: Dict[str, int],
+        classes: List[str],
+        subtract_control: bool,
+        current_epoch: int,
+        variant_desc: str,
+        variant_tag: str,
+    ) -> Optional[Dict]:
+        """Build per-compound features (optionally control-subtracted), train a
+        CatBoost classifier on a train split, evaluate on a held-out test split,
+        and render a confusion matrix.
+
+        Returns a dict with ``bare_metrics`` (unprefixed metric-name -> value),
+        the matplotlib ``fig`` for the confusion matrix, and ``cm_path``. Returns
+        ``None`` when there are too few compounds/classes to evaluate.
+        """
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import (
+            balanced_accuracy_score, f1_score, accuracy_score,
+            top_k_accuracy_score as topk_acc,
+            confusion_matrix, ConfusionMatrixDisplay,
+        )
 
         X, y, cids = build_mean_latent_features(
             embeddings=embeddings,
             compound_col=self._df[self.compound_col],
             label_col=self._df[self.label_col],
             label2idx=str2idx,
-            subtract_control=self.subtract_control,
+            subtract_control=subtract_control,
             normalize_before_subtract=self.normalize_before_subtract,
         )
 
         if X.shape[0] < 10:
-            return
+            return None
 
-        X, y, cids, classes, num_classes = filter_rare_classes_array(
-            X, y, cids, classes, self.min_compounds_per_class,
+        X, y, cids, variant_classes, num_classes = filter_rare_classes_array(
+            X, y, cids, list(classes), self.min_compounds_per_class,
         )
 
         if num_classes < 2 or X.shape[0] < 10:
-            return
+            return None
 
         # ── Train/test split ─────────────────────────────────────────────────
-        from sklearn.model_selection import train_test_split
-        from sklearn.metrics import (
-            balanced_accuracy_score, f1_score, accuracy_score,
-        )
-
         strat = y if len(np.unique(y)) > 1 else None
         X_train, X_test, y_train, y_test = train_test_split(
             X, y,
@@ -481,81 +596,33 @@ class ChemicalClassClassifierCallback(pl.Callback):
         preds = clf.predict(X_test).astype(int).ravel()
         probs = clf.predict_proba(X_test)
 
-        top1_acc = accuracy_score(y_test, preds)
-        balanced_acc = balanced_accuracy_score(y_test, preds)
-        macro_f1 = f1_score(y_test, preds, average="macro", zero_division=0)
-        weighted_f1 = f1_score(y_test, preds, average="weighted", zero_division=0)
-
-        from sklearn.metrics import top_k_accuracy_score as topk_acc
-
-        metrics = {
-            "cls_test/top1_accuracy": top1_acc,
-            "cls_test/balanced_accuracy": balanced_acc,
-            "cls_test/macro_f1": macro_f1,
-            "cls_test/weighted_f1": weighted_f1,
-            "cls_test/num_classes": float(num_classes),
-            "cls_test/num_compounds": float(X.shape[0]),
+        bare_metrics = {
+            "top1_accuracy": accuracy_score(y_test, preds),
+            "balanced_accuracy": balanced_accuracy_score(y_test, preds),
+            "macro_f1": f1_score(y_test, preds, average="macro", zero_division=0),
+            "weighted_f1": f1_score(y_test, preds, average="weighted", zero_division=0),
+            "num_classes": float(num_classes),
+            "num_compounds": float(X.shape[0]),
         }
 
         # Top-k accuracy (only meaningful when k < num_classes)
         for k in (3, 5):
             if k < num_classes:
-                topk = topk_acc(y_test, probs, k=k, labels=np.arange(num_classes))
-                metrics[f"cls_test/top{k}_accuracy"] = topk
+                bare_metrics[f"top{k}_accuracy"] = topk_acc(
+                    y_test, probs, k=k, labels=np.arange(num_classes),
+                )
 
         # ── Save confusion matrix ────────────────────────────────────────────
-        from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-
         cm = confusion_matrix(y_test, preds, labels=np.arange(num_classes))
         fig, ax = plt.subplots(figsize=(max(8, num_classes * 0.5), max(8, num_classes * 0.5)))
-        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=classes)
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=variant_classes)
         disp.plot(ax=ax, cmap="Blues", colorbar=True, xticks_rotation=90)
-        ax.set_title(f"Confusion Matrix — Epoch {current_epoch}")
+        ax.set_title(f"Confusion Matrix — Epoch {current_epoch} ({variant_desc})")
         fig.tight_layout()
 
         cm_dir = self.output_dir / "confusion_matrices"
         cm_dir.mkdir(parents=True, exist_ok=True)
-        cm_path = cm_dir / f"confusion_matrix_epoch{current_epoch:04d}.png"
+        cm_path = cm_dir / f"confusion_matrix_{variant_tag}_epoch{current_epoch:04d}.png"
         fig.savefig(cm_path, dpi=150)
 
-        # ── Log metrics + confusion matrix to W&B ────────────────────────────
-        # Use wandb.log() directly — trainer.logger.log_metrics() buffers
-        # internally and may never flush when called from a callback in
-        # Lightning 2.x.
-        try:
-            import wandb
-            if trainer.logger is not None and hasattr(trainer.logger, "experiment"):
-                experiment = trainer.logger.experiment
-                if experiment is not None:
-                    log_payload = dict(metrics)
-                    log_payload["cls_test/confusion_matrix"] = wandb.Image(fig)
-                    experiment.log(log_payload, commit=True)
-        except (ImportError, AttributeError) as e:
-            print(f"  [ClassifierCallback] W&B logging failed: {e}", flush=True)
-
-        plt.close(fig)
-
-        print(
-            f"\n  [ClassifierCallback] Epoch {current_epoch}: "
-            f"top1_acc={top1_acc:.3f}  balanced_acc={balanced_acc:.3f}  "
-            f"weighted_f1={weighted_f1:.3f}  "
-            f"({num_classes} classes, {X.shape[0]} compounds)"
-            f"  | confusion matrix -> {cm_path}\n",
-            flush=True,
-        )
-
-        # ── Save best checkpoint by balanced accuracy ────────────────────────
-        if balanced_acc > self._best_balanced_acc:
-            self._best_balanced_acc = balanced_acc
-            ckpt_dir = self.output_dir / "checkpoints" / self.ckpt_subdir
-            ckpt_dir.mkdir(parents=True, exist_ok=True)
-            ckpt_path = ckpt_dir / "best_balanced_acc.ckpt"
-            trainer.save_checkpoint(str(ckpt_path))
-            emb_path = ckpt_dir / "embeddings_best_balanced_acc.pt"
-            torch.save(embeddings, emb_path)
-            print(
-                f"  [ClassifierCallback] New best balanced_acc={balanced_acc:.3f} "
-                f"— saved checkpoint to {ckpt_path}\n"
-                f"  [ClassifierCallback] Saved embeddings to {emb_path}\n",
-                flush=True,
-            )
+        return {"bare_metrics": bare_metrics, "fig": fig, "cm_path": cm_path}
