@@ -278,6 +278,10 @@ class ContrastiveDataModule(pl.LightningDataModule):
             ``samples_per_class`` > 0), each train batch holds this many distinct
             synthesis programs, guaranteeing positives and negatives per batch.
         samples_per_class: K images per program for P x K sampling.
+        compound_level: derive contrastive labels at the compound level instead
+            of the synthesis-program level. Each compound becomes its own class,
+            so positives are images of the same compound (across plates /
+            replicates) rather than of the same synthesis program.
         seed: RNG seed for the train/val split.
     """
 
@@ -296,6 +300,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
                  use_control: bool = False,
                  classes_per_batch: int = 0,
                  samples_per_class: int = 0,
+                 compound_level: bool = False,
                  seed: int = 42) -> None:
         super().__init__()
         self.image_metadata_json = image_metadata_json
@@ -312,6 +317,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
         self.use_control = use_control
         self.classes_per_batch = classes_per_batch
         self.samples_per_class = samples_per_class
+        self.compound_level = compound_level
         self.seed = seed
 
         self.classes: List[str] = []
@@ -370,8 +376,20 @@ class ContrastiveDataModule(pl.LightningDataModule):
                 "filtering. Check --contrastive_labels / --contrastive_min_per_class."
             )
 
-        self.classes = sorted(set(comp2label.values()))
-        label2idx = {c: i for i, c in enumerate(self.classes)}
+        if self.compound_level:
+            # Each compound is its own contrastive class; positives are images
+            # of the same compound (across plates / replicates).
+            self.classes = sorted(comp2label.keys())
+            label2idx = {c: i for i, c in enumerate(self.classes)}
+
+            def label_for(compound_id: str) -> int:
+                return label2idx[compound_id]
+        else:
+            self.classes = sorted(set(comp2label.values()))
+            label2idx = {c: i for i, c in enumerate(self.classes)}
+
+            def label_for(compound_id: str) -> int:
+                return label2idx[comp2label[compound_id]]
 
         subsets = ("treated", "control") if self.use_control else ("treated",)
         samples: List[Tuple[str, int]] = []
@@ -379,7 +397,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
             cid = str(entry["Compound"])
             if cid not in comp2label:
                 continue
-            label_idx = label2idx[comp2label[cid]]
+            label_idx = label_for(cid)
             for plate_id, plate_data in entry.items():
                 if plate_id == "Compound":
                     continue
@@ -412,7 +430,8 @@ class ContrastiveDataModule(pl.LightningDataModule):
         self._train_labels = [label for _, label in train_samples]
         print(
             f"[ContrastiveDataModule] {len(samples)} images, "
-            f"{self.num_classes} synthesis programs "
+            f"{self.num_classes} "
+            f"{'compounds' if self.compound_level else 'synthesis programs'} "
             f"(train={len(train_samples)}, val={len(val_samples)})"
         )
 

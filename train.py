@@ -101,6 +101,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--contrastive_samples_per_class", type=int, default=0,
                         help="K for class-balanced P x K sampling: images per synthesis "
                              "program per batch.")
+    parser.add_argument("--compound_level", action="store_true",
+                        help="Compute the contrastive loss at the compound level "
+                             "instead of the synthesis-program level: each compound "
+                             "becomes its own class, so positives are images of the "
+                             "same compound (across plates/replicates).")
 
     # Optimization
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -235,6 +240,7 @@ def main() -> None:
             use_control=args.contrastive_use_control,
             classes_per_batch=args.contrastive_classes_per_batch,
             samples_per_class=args.contrastive_samples_per_class,
+            compound_level=args.compound_level,
             seed=args.seed,
         )
 
