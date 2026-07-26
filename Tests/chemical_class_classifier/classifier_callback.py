@@ -40,6 +40,11 @@ from classifier_utils import (
     build_label_encoder,
 )
 
+# ImageNet normalization stats for DINOv2-based models (embedding models that
+# expect normalized inputs rather than raw [0, 1] pixels).
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+
 try:
     from catboost import CatBoostClassifier
     _HAS_CATBOOST = True
@@ -75,8 +80,11 @@ def _encode_paths(
         if not imgs:
             continue
         batch = torch.stack(imgs, dim=0).to(device)
-        mu, _ = model.encode(batch)
-        latents.append(mu.cpu())
+        # VAE encoders return (mu, log_var); embedding models (e.g. DINOv2+LoRA)
+        # return a single feature tensor. Support both.
+        out = model.encode(batch)
+        feats = out[0] if isinstance(out, (tuple, list)) else out
+        latents.append(feats.cpu())
     return torch.cat(latents, dim=0) if latents else torch.empty(0)
 
 
@@ -88,12 +96,18 @@ def _encode_all_compounds(
     in_channels: int,
     batch_size: int,
     device: torch.device,
+    normalize_imagenet: bool = False,
 ) -> Dict:
     """Encode all compounds from metadata JSON into the embeddings dict format."""
-    transform = T.Compose([
+    tfm = [
         T.Resize((img_size, img_size), antialias=True),
         T.ConvertImageDtype(torch.float32),
-    ])
+    ]
+    # DINOv2-based models were trained on ImageNet-normalized inputs; match that
+    # here so callback embeddings are consistent with training.
+    if normalize_imagenet:
+        tfm.append(T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD))
+    transform = T.Compose(tfm)
     mode = ImageReadMode.GRAY if in_channels == 1 else ImageReadMode.RGB
 
     embeddings = {}
@@ -178,6 +192,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
         seed: int = 42,
         output_dir: str = "results",
         ckpt_subdir: str = "",
+        normalize_imagenet: bool = False,
     ):
         super().__init__()
         self.image_metadata_json = Path(image_metadata_json)
@@ -199,6 +214,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
         self.seed = seed
         self.output_dir = Path(output_dir)
         self.ckpt_subdir = ckpt_subdir
+        self.normalize_imagenet = normalize_imagenet
 
         # Pre-load static data once
         self._metadata: Optional[List[Dict]] = None
@@ -281,6 +297,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
             in_channels=self.in_channels,
             batch_size=self.batch_size,
             device=device,
+            normalize_imagenet=self.normalize_imagenet,
         )
 
         if not embeddings:
@@ -406,6 +423,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
             in_channels=self.in_channels,
             batch_size=self.batch_size,
             device=device,
+            normalize_imagenet=self.normalize_imagenet,
         )
 
         if not embeddings:

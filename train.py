@@ -333,7 +333,9 @@ def main() -> None:
     callbacks = [checkpoint_callback, lr_monitor]
 
     # Optional: chemical-class classifier callback (VAE-family models only)
-    if (not is_dino and args.cls_image_metadata and args.cls_label_metadata
+    # Optional: chemical-class classifier callback (works for both the VAE
+    # encoders and the DINOv2+LoRA embedding model).
+    if (args.cls_image_metadata and args.cls_label_metadata
             and args.cls_root_dir):
         cls_callback = ChemicalClassClassifierCallback(
             image_metadata_json=args.cls_image_metadata,
@@ -353,6 +355,7 @@ def main() -> None:
             seed=args.seed,
             output_dir=args.output_dir,
             ckpt_subdir=ckpt_suffix,
+            normalize_imagenet=is_dino,
         )
         callbacks.append(cls_callback)
         print(f"[ClassifierCallback] Enabled — evaluating every {args.cls_every_n_epochs} epochs")
