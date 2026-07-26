@@ -219,7 +219,9 @@ class ChemicalClassClassifierCallback(pl.Callback):
         # Pre-load static data once
         self._metadata: Optional[List[Dict]] = None
         self._df: Optional[pd.DataFrame] = None
-        self._best_balanced_acc: float = 0.0
+        # Best balanced accuracy tracked independently per variant tag
+        # (e.g. "nosub", "ctrl") so each gets its own best checkpoint/embeddings.
+        self._best_balanced_acc: Dict[str, float] = {}
         self._logging_verified: bool = False
 
     def _load_data(self) -> None:
@@ -510,11 +512,19 @@ class ChemicalClassClassifierCallback(pl.Callback):
             )
         print("", flush=True)
 
-        # ── Save best checkpoint by balanced accuracy (primary variant) ──────
-        balanced_acc = primary["bare_metrics"]["balanced_accuracy"]
-        if balanced_acc > self._best_balanced_acc:
-            self._best_balanced_acc = balanced_acc
-            ckpt_dir = self.output_dir / "checkpoints" / self.ckpt_subdir
+        # ── Save best checkpoint + embeddings independently per variant ──────
+        # Each variant may peak at a different epoch, so track its own best
+        # balanced accuracy and write to a variant-specific sub-directory.
+        for subtract_flag, prefix, desc in variants:
+            res = results_by_flag.get(subtract_flag)
+            if res is None:
+                continue
+            variant_tag = prefix.split("/")[-1].rstrip("_")  # "nosub" / "ctrl"
+            balanced_acc = res["bare_metrics"]["balanced_accuracy"]
+            if balanced_acc <= self._best_balanced_acc.get(variant_tag, 0.0):
+                continue
+            self._best_balanced_acc[variant_tag] = balanced_acc
+            ckpt_dir = self.output_dir / "checkpoints" / self.ckpt_subdir / variant_tag
             ckpt_dir.mkdir(parents=True, exist_ok=True)
             ckpt_path = ckpt_dir / "best_balanced_acc.ckpt"
             trainer.save_checkpoint(str(ckpt_path))
@@ -522,7 +532,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
             torch.save(embeddings, emb_path)
             print(
                 f"  [ClassifierCallback] New best balanced_acc={balanced_acc:.3f} "
-                f"— saved checkpoint to {ckpt_path}\n"
+                f"({desc}) — saved checkpoint to {ckpt_path}\n"
                 f"  [ClassifierCallback] Saved embeddings to {emb_path}\n",
                 flush=True,
             )
