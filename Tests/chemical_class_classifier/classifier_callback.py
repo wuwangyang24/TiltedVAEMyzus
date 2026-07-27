@@ -222,6 +222,9 @@ class ChemicalClassClassifierCallback(pl.Callback):
         # Best balanced accuracy tracked independently per variant tag
         # (e.g. "nosub", "ctrl") so each gets its own best checkpoint/embeddings.
         self._best_balanced_acc: Dict[str, float] = {}
+        # Best in-batch kNN accuracy on the validation set (dino_lora only);
+        # tracked to save the matching checkpoint + embeddings.
+        self._best_knn_acc: float = 0.0
         self._logging_verified: bool = False
 
     def _load_data(self) -> None:
@@ -284,7 +287,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
 
         # Pre-filter to only compounds in valid classes, then take 1% for speed
         filtered_metadata = self._filter_metadata(self._metadata)
-        subset_size = max(1, len(filtered_metadata) // 100)
+        subset_size = max(1, len(filtered_metadata) // 10)
         metadata_subset = filtered_metadata[:subset_size]
 
         model = pl_module.model
@@ -536,6 +539,29 @@ class ChemicalClassClassifierCallback(pl.Callback):
                 f"  [ClassifierCallback] Saved embeddings to {emb_path}\n",
                 flush=True,
             )
+
+        # ── Save best checkpoint + embeddings on best val batch-kNN accuracy ──
+        # `val_batch_knn_acc` is logged by ContrastiveExperiment (dino_lora).
+        # Skip when the metric is absent (e.g. VAE-family models). Checkpoint and
+        # embeddings are saved together so they stay in sync at the same epoch.
+        knn_metric = trainer.callback_metrics.get("val_batch_knn_acc")
+        if knn_metric is not None:
+            knn_acc = float(knn_metric)
+            if knn_acc > self._best_knn_acc:
+                self._best_knn_acc = knn_acc
+                knn_dir = (self.output_dir / "checkpoints" / self.ckpt_subdir
+                           / "best_val_knn_acc")
+                knn_dir.mkdir(parents=True, exist_ok=True)
+                ckpt_path = knn_dir / "best_val_knn_acc.ckpt"
+                trainer.save_checkpoint(str(ckpt_path))
+                emb_path = knn_dir / "embeddings_best_val_knn_acc.pt"
+                torch.save(embeddings, emb_path)
+                print(
+                    f"  [ClassifierCallback] New best val_batch_knn_acc={knn_acc:.3f} "
+                    f"— saved checkpoint to {ckpt_path}\n"
+                    f"  [ClassifierCallback] Saved embeddings to {emb_path}\n",
+                    flush=True,
+                )
 
     def _evaluate_classifier_variant(
         self,
