@@ -105,7 +105,9 @@ class VAE(nn.Module):
         result = torch.flatten(result, start_dim=1)
 
         mu = self.fc_mu(result)
-        log_var = self.fc_var(result)
+        # Do not train the variance: use fixed unit variance (log_var = 0).
+        # fc_var is kept only for parameter-count parity with TiltedVAE.
+        log_var = torch.zeros_like(mu)
 
         return [mu, log_var]
 

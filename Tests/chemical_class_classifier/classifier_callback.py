@@ -277,14 +277,14 @@ class ChemicalClassClassifierCallback(pl.Callback):
     def _run_logging_smoke_test(
         self, trainer: pl.Trainer, pl_module: pl.LightningModule
     ) -> None:
-        """Run a quick classifier on 10% of data at epoch 0 to verify logging works."""
+        """Run a quick classifier on 1% of data at epoch 0 to verify logging works."""
         self._load_data()
         if self._metadata is None or self._df is None or self._df.empty:
             return
 
-        # Pre-filter to only compounds in valid classes, then take 10% for speed
+        # Pre-filter to only compounds in valid classes, then take 1% for speed
         filtered_metadata = self._filter_metadata(self._metadata)
-        subset_size = max(1, len(filtered_metadata) // 10)
+        subset_size = max(1, len(filtered_metadata) // 100)
         metadata_subset = filtered_metadata[:subset_size]
 
         model = pl_module.model
@@ -319,7 +319,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
         if X.shape[0] < 4:
             print(
                 f"  [ClassifierCallback] Smoke test: only {X.shape[0]} compounds "
-                f"from 10% subset, need >=4. Skipping.", flush=True,
+                f"from 1% subset, need >=4. Skipping.", flush=True,
             )
             return
 
@@ -365,7 +365,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
                     f"  [ClassifierCallback] Smoke test PASSED — logging works. "
                     f"(acc={smoke_metrics['cls_test/smoke_top1_accuracy']:.3f}, "
                     f"bal_acc={smoke_metrics['cls_test/smoke_balanced_accuracy']:.3f}, "
-                    f"{num_classes} classes, {X.shape[0]} compounds from 10% subset)",
+                    f"{num_classes} classes, {X.shape[0]} compounds from 1% subset)",
                     flush=True,
                 )
             except Exception as e:
