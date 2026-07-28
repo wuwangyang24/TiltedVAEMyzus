@@ -74,9 +74,10 @@ def parse_args() -> argparse.Namespace:
                              "If not set, the backbone features are directly L2-normalized.")
 
     # Contrastive dataset (synthesis-program labels; only used when --model dino_lora)
-    parser.add_argument("--contrastive_metadata", type=str, default=None,
+    parser.add_argument("--contrastive_metadata", type=str, nargs="+", default=None,
                         help="JSON metadata (compounds -> plates -> image paths) for "
-                             "the contrastive dataset. Required for --model dino_lora.")
+                             "the contrastive dataset. Multiple files can be provided "
+                             "and will be merged. Required for --model dino_lora.")
     parser.add_argument("--contrastive_labels", type=str, default=None,
                         help="CSV/Excel mapping compounds to synthesis-program labels. "
                              "Required for --model dino_lora.")

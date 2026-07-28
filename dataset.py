@@ -286,7 +286,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
     """
 
     def __init__(self,
-                 image_metadata_json: str,
+                 image_metadata_json,
                  label_metadata_csv: str,
                  root_dir: str,
                  img_size: int = 224,
@@ -366,8 +366,14 @@ class ContrastiveDataModule(pl.LightningDataModule):
         return dict(zip(df[self.compound_col], df[self.label_col]))
 
     def _build_samples(self) -> List[Tuple[str, int]]:
-        with open(self.image_metadata_json) as f:
-            metadata = json.load(f)
+        # Support single path or list of paths for metadata JSONs.
+        paths = self.image_metadata_json
+        if isinstance(paths, str):
+            paths = [paths]
+        metadata = []
+        for p in paths:
+            with open(p) as f:
+                metadata.extend(json.load(f))
 
         comp2label = self._load_compound_labels()
         if not comp2label:
