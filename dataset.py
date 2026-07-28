@@ -416,6 +416,17 @@ class ContrastiveDataModule(pl.LightningDataModule):
                 "No labelled images found. Check --contrastive_metadata / "
                 "--contrastive_root_dir and the compound-ID join."
             )
+
+        # Recompute classes to only include those with actual images.
+        actual_labels = sorted(set(label for _, label in samples))
+        if self.compound_level:
+            self.classes = [self.classes[i] for i in actual_labels]
+        else:
+            self.classes = [self.classes[i] for i in actual_labels]
+        # Remap labels to contiguous 0..K-1
+        old2new = {old: new for new, old in enumerate(actual_labels)}
+        samples = [(path, old2new[label]) for path, label in samples]
+
         return samples
 
     def setup(self, stage: Optional[str] = None) -> None:
