@@ -469,22 +469,13 @@ class ChemicalClassClassifierCallback(pl.Callback):
             if res is None:
                 continue
             results_by_key[variant_tag] = res
-            for name, val in res["bare_metrics"].items():
-                all_metrics[prefix + name] = val
+            # Log only balanced_accuracy per variant (4 total)
+            all_metrics[prefix + "balanced_accuracy"] = res["bare_metrics"]["balanced_accuracy"]
             if res["fig"] is not None:
                 wandb_images[prefix + "confusion_matrix"] = res["fig"]
 
         if not results_by_key:
             return
-
-        # ── Backward-compatible `cls_test/` metrics mirror the configured
-        #    self.subtract_control variant (falls back to any available one). ──
-        primary_tag = "ctrl" if self.subtract_control else "nosub"
-        primary = results_by_key.get(
-            primary_tag, next(iter(results_by_key.values()))
-        )
-        for name, val in primary["bare_metrics"].items():
-            all_metrics["cls_test/" + name] = val
 
         # ── Log metrics + confusion matrices to W&B ──────────────────────────
         # Use wandb.log() directly — trainer.logger.log_metrics() buffers
@@ -514,9 +505,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
             m = res["bare_metrics"]
             print(
                 f"\n  [ClassifierCallback] Epoch {current_epoch} ({desc}): "
-                f"top1_acc={m['top1_accuracy']:.3f}  "
                 f"balanced_acc={m['balanced_accuracy']:.3f}  "
-                f"weighted_f1={m['weighted_f1']:.3f}  "
                 f"({int(m['num_classes'])} classes, {int(m['num_compounds'])} compounds)"
                 f"  | confusion matrix -> {res['cm_path']}",
                 flush=True,
@@ -592,8 +581,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
         """
         from sklearn.model_selection import train_test_split
         from sklearn.metrics import (
-            balanced_accuracy_score, f1_score, accuracy_score,
-            top_k_accuracy_score as topk_acc,
+            balanced_accuracy_score,
             confusion_matrix, ConfusionMatrixDisplay,
         )
 
@@ -644,23 +632,12 @@ class ChemicalClassClassifierCallback(pl.Callback):
 
         # ── Evaluate ─────────────────────────────────────────────────────────
         preds = clf.predict(X_test).astype(int).ravel()
-        probs = clf.predict_proba(X_test)
 
         bare_metrics = {
-            "top1_accuracy": accuracy_score(y_test, preds),
             "balanced_accuracy": balanced_accuracy_score(y_test, preds),
-            "macro_f1": f1_score(y_test, preds, average="macro", zero_division=0),
-            "weighted_f1": f1_score(y_test, preds, average="weighted", zero_division=0),
             "num_classes": float(num_classes),
             "num_compounds": float(X.shape[0]),
         }
-
-        # Top-k accuracy (only meaningful when k < num_classes)
-        for k in (3, 5):
-            if k < num_classes:
-                bare_metrics[f"top{k}_accuracy"] = topk_acc(
-                    y_test, probs, k=k, labels=np.arange(num_classes),
-                )
 
         # ── Save confusion matrix ────────────────────────────────────────────
         cm = confusion_matrix(y_test, preds, labels=np.arange(num_classes))
