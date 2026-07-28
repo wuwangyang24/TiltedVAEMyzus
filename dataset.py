@@ -456,6 +456,11 @@ class ContrastiveDataModule(pl.LightningDataModule):
         train_samples = [samples[i] for i in train_idx]
         val_samples = [samples[i] for i in val_idx]
 
+        # Shuffle val samples so that the val dataloader (shuffle=False) does
+        # not serve compound-grouped batches, which would inflate batch-level
+        # metrics like kNN accuracy.
+        rng.shuffle(val_samples)
+
         transform = self._build_transform()
         self.train_dataset = ContrastiveImageDataset(train_samples, transform)
         self.val_dataset = ContrastiveImageDataset(val_samples, transform)
