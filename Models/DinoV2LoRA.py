@@ -92,6 +92,9 @@ class DinoV2LoRA(nn.Module):
         lora_dropout: dropout applied to the LoRA input.
         lora_targets: leaf module names to adapt (e.g. ["qkv"], ["qkv", "proj"]).
         temperature: softmax temperature for the InfoNCE / SupCon loss.
+        use_proj_head: if True, add a 2-layer MLP projection head on top of
+            the backbone features; otherwise output the L2-normalized backbone
+            features directly.
         pretrained: load pretrained DINOv2 weights.
     """
 
@@ -108,6 +111,7 @@ class DinoV2LoRA(nn.Module):
                  lora_dropout: float = 0.0,
                  lora_targets: Optional[List[str]] = None,
                  temperature: float = 0.1,
+                 use_proj_head: bool = True,
                  pretrained: bool = True) -> None:
         super().__init__()
 
@@ -125,6 +129,7 @@ class DinoV2LoRA(nn.Module):
         self.img_size = img_size
         self.embedding_dim = embedding_dim
         self.temperature = temperature
+        self.use_proj_head = use_proj_head
         lora_targets = lora_targets or ["qkv"]
 
         # Feature-extractor backbone (num_classes=0 -> pooled features, no head).
@@ -148,11 +153,14 @@ class DinoV2LoRA(nn.Module):
         self._n_lora_layers = n_adapted
 
         # Trainable projection head mapping backbone features -> embedding space.
-        self.projection = nn.Sequential(
-            nn.Linear(feat_dim, proj_hidden_dim),
-            nn.GELU(),
-            nn.Linear(proj_hidden_dim, embedding_dim),
-        )
+        if self.use_proj_head:
+            self.projection = nn.Sequential(
+                nn.Linear(feat_dim, proj_hidden_dim),
+                nn.GELU(),
+                nn.Linear(proj_hidden_dim, embedding_dim),
+            )
+        else:
+            self.projection = None
 
     def trainable_parameters(self) -> List[nn.Parameter]:
         """Return only the trainable (LoRA + projection head) parameters."""
@@ -161,8 +169,9 @@ class DinoV2LoRA(nn.Module):
     def encode(self, x: Tensor) -> Tensor:
         """Return L2-normalized embeddings for a batch of images [N, 3, H, W]."""
         feats = self.backbone(x)          # (N, feat_dim)
-        emb = self.projection(feats)      # (N, embedding_dim)
-        return F.normalize(emb, dim=1)
+        if self.projection is not None:
+            feats = self.projection(feats)  # (N, embedding_dim)
+        return F.normalize(feats, dim=1)
 
     def forward(self, x: Tensor, **kwargs) -> Tensor:
         return self.encode(x)

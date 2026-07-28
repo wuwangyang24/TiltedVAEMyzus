@@ -69,6 +69,9 @@ def parse_args() -> argparse.Namespace:
                              "(e.g. qkv proj)")
     parser.add_argument("--temperature", type=float, default=0.1,
                         help="Softmax temperature for the InfoNCE/SupCon loss")
+    parser.add_argument("--use_proj_head", action="store_true",
+                        help="Use the projection head on top of the backbone features. "
+                             "If not set, the backbone features are directly L2-normalized.")
 
     # Contrastive dataset (synthesis-program labels; only used when --model dino_lora)
     parser.add_argument("--contrastive_metadata", type=str, default=None,
@@ -254,6 +257,7 @@ def main() -> None:
             lora_dropout=args.lora_dropout,
             lora_targets=args.lora_targets,
             temperature=args.temperature,
+            use_proj_head=args.use_proj_head,
         )
 
         experiment = ContrastiveExperiment(
