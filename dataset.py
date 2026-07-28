@@ -422,10 +422,25 @@ class ContrastiveDataModule(pl.LightningDataModule):
         samples = self._build_samples()
 
         rng = np.random.default_rng(self.seed)
-        indices = rng.permutation(len(samples))
-        n_val = int(len(samples) * self.val_split)
-        val_idx = indices[:n_val]
-        train_idx = indices[n_val:]
+
+        if self.compound_level:
+            # Split at the compound level: all images of a given compound go
+            # entirely to train or val to avoid data leakage.
+            label_to_indices: Dict[int, List[int]] = {}
+            for idx, (_, label) in enumerate(samples):
+                label_to_indices.setdefault(label, []).append(idx)
+            all_labels = list(label_to_indices.keys())
+            rng.shuffle(all_labels)
+            n_val_classes = max(1, int(len(all_labels) * self.val_split))
+            val_labels = set(all_labels[:n_val_classes])
+            train_idx = [i for lab, idxs in label_to_indices.items()
+                         if lab not in val_labels for i in idxs]
+            val_idx = [i for lab in val_labels for i in label_to_indices[lab]]
+        else:
+            indices = rng.permutation(len(samples))
+            n_val = int(len(samples) * self.val_split)
+            val_idx = indices[:n_val].tolist()
+            train_idx = indices[n_val:].tolist()
 
         train_samples = [samples[i] for i in train_idx]
         val_samples = [samples[i] for i in val_idx]
