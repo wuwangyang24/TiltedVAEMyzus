@@ -435,46 +435,53 @@ class ChemicalClassClassifierCallback(pl.Callback):
             return
 
         # ── Build features and train classifier ──────────────────────────────
-        # Evaluate BOTH variants simultaneously: without control subtraction
-        # (raw treated means) and with per-plate control subtraction. This lets
-        # us compare how much the control-subtraction step helps class
-        # separability at every evaluation epoch.
+        # Evaluate FOUR variants simultaneously:
+        #   1. Raw treated means (no subtraction, no normalization)
+        #   2. Control-subtracted treated means
+        #   3. L2-normalized treated means
+        #   4. Control-subtracted then L2-normalized treated means
         str2idx, classes = build_label_encoder(self._df[self.label_col])
 
+        # (subtract_control, normalize_output, prefix, description)
         variants = [
-            (False, "cls_test/nosub_", "no control subtraction"),
-            (True, "cls_test/ctrl_", "control subtracted"),
+            (False, False, "cls_test/nosub_", "no control subtraction"),
+            (True, False, "cls_test/ctrl_", "control subtracted"),
+            (False, True, "cls_test/norm_", "normalized embeddings"),
+            (True, True, "cls_test/norm_ctrl_", "normalized control-subtracted"),
         ]
 
         all_metrics: Dict[str, float] = {}
         wandb_images: Dict[str, object] = {}
-        results_by_flag: Dict[bool, Dict] = {}
+        results_by_key: Dict[str, Dict] = {}
 
-        for subtract_flag, prefix, desc in variants:
+        for subtract_flag, normalize_flag, prefix, desc in variants:
+            variant_tag = prefix.split("/")[-1].rstrip("_")
             res = self._evaluate_classifier_variant(
                 embeddings=embeddings,
                 str2idx=str2idx,
                 classes=classes,
                 subtract_control=subtract_flag,
+                normalize_output=normalize_flag,
                 current_epoch=current_epoch,
                 variant_desc=desc,
-                variant_tag=prefix.split("/")[-1].rstrip("_"),
+                variant_tag=variant_tag,
             )
             if res is None:
                 continue
-            results_by_flag[subtract_flag] = res
+            results_by_key[variant_tag] = res
             for name, val in res["bare_metrics"].items():
                 all_metrics[prefix + name] = val
             if res["fig"] is not None:
                 wandb_images[prefix + "confusion_matrix"] = res["fig"]
 
-        if not results_by_flag:
+        if not results_by_key:
             return
 
         # ── Backward-compatible `cls_test/` metrics mirror the configured
         #    self.subtract_control variant (falls back to any available one). ──
-        primary = results_by_flag.get(
-            self.subtract_control, next(iter(results_by_flag.values()))
+        primary_tag = "ctrl" if self.subtract_control else "nosub"
+        primary = results_by_key.get(
+            primary_tag, next(iter(results_by_key.values()))
         )
         for name, val in primary["bare_metrics"].items():
             all_metrics["cls_test/" + name] = val
@@ -495,12 +502,13 @@ class ChemicalClassClassifierCallback(pl.Callback):
         except (ImportError, AttributeError) as e:
             print(f"  [ClassifierCallback] W&B logging failed: {e}", flush=True)
 
-        for res in results_by_flag.values():
+        for res in results_by_key.values():
             if res["fig"] is not None:
                 plt.close(res["fig"])
 
-        for subtract_flag, prefix, desc in variants:
-            res = results_by_flag.get(subtract_flag)
+        for subtract_flag, normalize_flag, prefix, desc in variants:
+            variant_tag = prefix.split("/")[-1].rstrip("_")
+            res = results_by_key.get(variant_tag)
             if res is None:
                 continue
             m = res["bare_metrics"]
@@ -518,11 +526,11 @@ class ChemicalClassClassifierCallback(pl.Callback):
         # ── Save best checkpoint + embeddings independently per variant ──────
         # Each variant may peak at a different epoch, so track its own best
         # balanced accuracy and write to a variant-specific sub-directory.
-        for subtract_flag, prefix, desc in variants:
-            res = results_by_flag.get(subtract_flag)
+        for subtract_flag, normalize_flag, prefix, desc in variants:
+            variant_tag = prefix.split("/")[-1].rstrip("_")
+            res = results_by_key.get(variant_tag)
             if res is None:
                 continue
-            variant_tag = prefix.split("/")[-1].rstrip("_")  # "nosub" / "ctrl"
             balanced_acc = res["bare_metrics"]["balanced_accuracy"]
             if balanced_acc <= self._best_balanced_acc.get(variant_tag, 0.0):
                 continue
@@ -569,13 +577,14 @@ class ChemicalClassClassifierCallback(pl.Callback):
         str2idx: Dict[str, int],
         classes: List[str],
         subtract_control: bool,
+        normalize_output: bool,
         current_epoch: int,
         variant_desc: str,
         variant_tag: str,
     ) -> Optional[Dict]:
-        """Build per-compound features (optionally control-subtracted), train a
-        CatBoost classifier on a train split, evaluate on a held-out test split,
-        and render a confusion matrix.
+        """Build per-compound features (optionally control-subtracted and/or
+        L2-normalized), train a CatBoost classifier on a train split, evaluate
+        on a held-out test split, and render a confusion matrix.
 
         Returns a dict with ``bare_metrics`` (unprefixed metric-name -> value),
         the matplotlib ``fig`` for the confusion matrix, and ``cm_path``. Returns
@@ -596,6 +605,11 @@ class ChemicalClassClassifierCallback(pl.Callback):
             subtract_control=subtract_control,
             normalize_before_subtract=self.normalize_before_subtract,
         )
+
+        # Optionally L2-normalize the per-compound feature vectors.
+        if normalize_output and X.shape[0] > 0:
+            norms = np.linalg.norm(X, axis=1, keepdims=True)
+            X = X / np.clip(norms, 1e-8, None)
 
         if X.shape[0] < 10:
             return None
