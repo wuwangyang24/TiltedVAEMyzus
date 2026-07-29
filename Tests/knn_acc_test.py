@@ -262,12 +262,15 @@ def bootstrap_ci_by_compound(
         # Resample compounds with replacement
         sampled = rng.choice(unique_compounds, size=n_compounds, replace=True)
 
-        # Gather indices and build new contiguous labels
+        # Gather indices; duplicates of the same compound share one label
+        unique_sampled = np.unique(sampled)
+        label_map = {cid: i for i, cid in enumerate(unique_sampled)}
+
         all_idx, new_labels = [], []
-        for new_lab, cid in enumerate(sampled):
+        for cid in sampled:
             idx = compound_to_idx[cid]
             all_idx.append(idx)
-            new_labels.extend([new_lab] * len(idx))
+            new_labels.extend([label_map[cid]] * len(idx))
 
         all_idx = np.concatenate(all_idx)
         boot_embs = embeddings[all_idx]
