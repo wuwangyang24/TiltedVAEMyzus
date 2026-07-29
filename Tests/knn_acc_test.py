@@ -211,10 +211,14 @@ def gather_embeddings_from_model(
 @torch.no_grad()
 def topk_knn_accuracy(
     embeddings: torch.Tensor, labels: torch.Tensor, k: int,
-) -> float:
+) -> Tuple[float, np.ndarray]:
     """Fraction of samples whose top-k nearest neighbours contain a same-label sample.
 
     Uses cosine similarity (embeddings are L2-normalized first).
+
+    Returns:
+        acc: overall top-k KNN accuracy.
+        hits: (N,) boolean array of per-sample hits (for bootstrap CI).
     """
     embeddings = torch.nn.functional.normalize(embeddings, dim=1)
     sim = embeddings @ embeddings.t()
@@ -224,12 +228,33 @@ def topk_knn_accuracy(
     n = embeddings.size(0)
     actual_k = min(k, n - 1)
     if actual_k < 1:
-        return 0.0
+        return 0.0, np.zeros(n, dtype=bool)
 
     _, topk_idx = sim.topk(actual_k, dim=1)  # (N, k)
     topk_labels = labels[topk_idx]            # (N, k)
     hits = (topk_labels == labels.unsqueeze(1)).any(dim=1)  # (N,)
-    return hits.float().mean().item()
+    hits_np = hits.cpu().numpy()
+    return float(hits.float().mean().item()), hits_np
+
+
+def bootstrap_ci(
+    hits: np.ndarray, n_bootstraps: int = 1000, ci_level: float = 0.95,
+    seed: int = 42,
+) -> Tuple[float, float, float]:
+    """Bootstrap confidence interval for mean accuracy from per-sample hits.
+
+    Returns (mean, lower, upper).
+    """
+    rng = np.random.default_rng(seed)
+    n = len(hits)
+    boot_means = np.empty(n_bootstraps)
+    for i in range(n_bootstraps):
+        idx = rng.choice(n, size=n, replace=True)
+        boot_means[i] = hits[idx].mean()
+    alpha = 1.0 - ci_level
+    lo = float(np.percentile(boot_means, 100 * alpha / 2))
+    hi = float(np.percentile(boot_means, 100 * (1 - alpha / 2)))
+    return float(np.mean(boot_means)), lo, hi
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
@@ -260,6 +285,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--normalize_before_subtract", action="store_true",
                    help="L2-normalize treated and control embeddings before "
                         "subtracting control (only used with --subtract_control)")
+
+    p.add_argument("--n_bootstraps", type=int, default=1000,
+                   help="Number of bootstrap resamples for CI estimation")
+    p.add_argument("--ci_level", type=float, default=0.95,
+                   help="Confidence level for bootstrap CI (default: 0.95)")
 
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--seed", type=int, default=42)
@@ -298,6 +328,7 @@ def main() -> None:
 
     # Run trials with different random seeds
     results_per_k: Dict[int, List[float]] = {k: [] for k in args.topk}
+    hits_per_k: Dict[int, List[np.ndarray]] = {k: [] for k in args.topk}
 
     for trial in range(args.n_trials):
         trial_seed = args.seed + trial
@@ -320,18 +351,31 @@ def main() -> None:
               f"{labels.unique().size(0)} compounds")
 
         for k in args.topk:
-            acc = topk_knn_accuracy(embeddings, labels, k)
+            acc, hits = topk_knn_accuracy(embeddings, labels, k)
             results_per_k[k].append(acc)
-            print(f"  top-{k} KNN accuracy: {acc:.4f}")
+            hits_per_k[k].append(hits)
+            ci_mean, ci_lo, ci_hi = bootstrap_ci(
+                hits, n_bootstraps=args.n_bootstraps,
+                ci_level=args.ci_level, seed=trial_seed,
+            )
+            print(f"  top-{k} KNN accuracy: {acc:.4f}  "
+                  f"{int(args.ci_level * 100)}% CI [{ci_lo:.4f}, {ci_hi:.4f}]")
 
     # Summary
-    print("\n" + "=" * 50)
-    print("Summary (mean ± std across trials):")
+    pct = int(args.ci_level * 100)
+    print("\n" + "=" * 60)
+    print(f"Summary (mean ± std across trials, {pct}% bootstrap CI on pooled hits):")
     for k in args.topk:
         vals = results_per_k[k]
         if vals:
             mean, std = np.mean(vals), np.std(vals)
-            print(f"  top-{k}: {mean:.4f} ± {std:.4f}")
+            pooled = np.concatenate(hits_per_k[k])
+            _, ci_lo, ci_hi = bootstrap_ci(
+                pooled, n_bootstraps=args.n_bootstraps,
+                ci_level=args.ci_level, seed=args.seed,
+            )
+            print(f"  top-{k}: {mean:.4f} ± {std:.4f}  "
+                  f"CI [{ci_lo:.4f}, {ci_hi:.4f}]")
         else:
             print(f"  top-{k}: no valid trials")
 
