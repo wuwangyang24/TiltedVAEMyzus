@@ -337,11 +337,22 @@ def main() -> None:
         monitor="val_loss",
         mode="min",
         save_top_k=3,
-        save_last=True,
+        save_last=False,
     )
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
 
     callbacks = [checkpoint_callback, lr_monitor]
+
+    if is_dino:
+        knn_checkpoint_callback = ModelCheckpoint(
+            dirpath=ckpt_dir,
+            filename=args.model + "-best-knn-{epoch:02d}-{val_batch_knn_acc:.4f}",
+            monitor="val_batch_knn_acc",
+            mode="max",
+            save_top_k=1,
+            save_last=False,
+        )
+        callbacks.append(knn_checkpoint_callback)
 
     # Optional: chemical-class classifier callback (VAE-family models only)
     # Optional: chemical-class classifier callback (works for both the VAE
