@@ -349,7 +349,7 @@ def main() -> None:
         filename=args.model + "-{epoch:02d}-{val_loss:.2f}",
         monitor="val_loss",
         mode="min",
-        save_top_k=3,
+        save_top_k=1,
         save_last=False,
     )
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
@@ -417,6 +417,27 @@ def main() -> None:
     )
 
     trainer.fit(experiment, datamodule=datamodule)
+
+    # ── Post-training: evaluate best checkpoints with chemical-class classifier ──
+    cls_callback = None
+    for cb in callbacks:
+        if isinstance(cb, ChemicalClassClassifierCallback):
+            cls_callback = cb
+            break
+
+    if cls_callback is not None:
+        best_ckpts = [("best_val_loss", checkpoint_callback.best_model_path)]
+        if is_dino:
+            best_ckpts.append(("best_val_knn_acc", knn_checkpoint_callback.best_model_path))
+
+        for tag, ckpt_path in best_ckpts:
+            if not ckpt_path or not os.path.exists(ckpt_path):
+                print(f"  [PostTraining] No checkpoint found for {tag}, skipping.", flush=True)
+                continue
+            print(f"\n  [PostTraining] Loading {tag} checkpoint: {ckpt_path}", flush=True)
+            ckpt = torch.load(ckpt_path, weights_only=False)
+            experiment.load_state_dict(ckpt["state_dict"])
+            cls_callback.run_final_evaluation(trainer, experiment, tag)
 
 
 if __name__ == "__main__":

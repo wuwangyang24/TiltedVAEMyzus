@@ -256,12 +256,6 @@ class ChemicalClassClassifierCallback(pl.Callback):
         # Pre-load static data once
         self._metadata: Optional[List[Dict]] = None
         self._df: Optional[pd.DataFrame] = None
-        # Best balanced accuracy tracked independently per variant tag
-        # (e.g. "nosub", "ctrl") so each gets its own best checkpoint/embeddings.
-        self._best_balanced_acc: Dict[str, float] = {}
-        # Best in-batch kNN accuracy on the validation set (dino_lora only);
-        # tracked to save the matching checkpoint + embeddings.
-        self._best_knn_acc: float = 0.0
         self._logging_verified: bool = False
 
     def _load_data(self) -> None:
@@ -550,53 +544,123 @@ class ChemicalClassClassifierCallback(pl.Callback):
             )
         print("", flush=True)
 
-        # ── Save best checkpoint + embeddings independently per variant ──────
-        # Each variant may peak at a different epoch, so track its own best
-        # balanced accuracy and write to a variant-specific sub-directory.
+    def run_final_evaluation(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        tag: str,
+    ) -> None:
+        """Run chemical-class evaluation and save embeddings for a loaded checkpoint.
+
+        Args:
+            tag: identifier for the checkpoint (e.g. "best_val_loss"), used to
+                 name the output sub-directory and W&B metric keys.
+        """
+        if not _HAS_CATBOOST:
+            print(f"  [ClassifierCallback] CatBoost not available, skipping final eval ({tag}).", flush=True)
+            return
+
+        self._load_data()
+        if self._metadata is None or self._df is None or self._df.empty:
+            return
+
+        model = pl_module.model
+        model.eval()
+        device = pl_module.device
+
+        filtered_metadata = self._filter_metadata(self._metadata)
+        if not filtered_metadata:
+            return
+
+        print(f"\n  [ClassifierCallback] Final evaluation ({tag}): encoding compounds...", flush=True)
+        embeddings = _encode_all_compounds(
+            metadata=filtered_metadata,
+            root_dir=self.root_dir,
+            model=model,
+            img_size=self.img_size,
+            in_channels=self.in_channels,
+            batch_size=self.batch_size,
+            device=device,
+            normalize_imagenet=self.normalize_imagenet,
+        )
+
+        if not embeddings:
+            print(f"  [ClassifierCallback] No embeddings produced for {tag}, skipping.", flush=True)
+            return
+
+        # Save embeddings
+        emb_dir = self.output_dir / "checkpoints" / self.ckpt_subdir / tag
+        emb_dir.mkdir(parents=True, exist_ok=True)
+        emb_path = emb_dir / f"embeddings_{tag}.pt"
+        torch.save(embeddings, emb_path)
+        print(f"  [ClassifierCallback] Saved embeddings to {emb_path}", flush=True)
+
+        # Evaluate all 4 variants
+        str2idx, classes = build_label_encoder(self._df[self.label_col])
+        variants = [
+            (False, False, f"cls_final_{tag}/nosub_", "no control subtraction"),
+            (True, False, f"cls_final_{tag}/ctrl_", "control subtracted"),
+            (False, True, f"cls_final_{tag}/norm_", "normalized embeddings"),
+            (True, True, f"cls_final_{tag}/norm_ctrl_", "normalized control-subtracted"),
+        ]
+
+        all_metrics: Dict[str, float] = {}
+        wandb_images: Dict[str, object] = {}
+        results_by_key: Dict[str, Dict] = {}
+
+        for subtract_flag, normalize_flag, prefix, desc in variants:
+            variant_tag = prefix.split("/")[-1].rstrip("_")
+            res = self._evaluate_classifier_variant(
+                embeddings=embeddings,
+                str2idx=str2idx,
+                classes=classes,
+                subtract_control=subtract_flag,
+                normalize_output=normalize_flag,
+                current_epoch=trainer.current_epoch,
+                variant_desc=f"{tag} — {desc}",
+                variant_tag=f"{tag}_{variant_tag}",
+            )
+            if res is None:
+                continue
+            results_by_key[variant_tag] = res
+            all_metrics[prefix + "balanced_accuracy"] = res["bare_metrics"]["balanced_accuracy"]
+            if res["fig"] is not None:
+                wandb_images[prefix + "confusion_matrix"] = res["fig"]
+
+        if not results_by_key:
+            return
+
+        # Log to W&B
+        try:
+            import wandb
+            if trainer.logger is not None and hasattr(trainer.logger, "experiment"):
+                experiment = trainer.logger.experiment
+                if experiment is not None:
+                    log_payload = dict(all_metrics)
+                    for key, fig in wandb_images.items():
+                        log_payload[key] = wandb.Image(fig)
+                    experiment.log(log_payload, commit=True)
+        except (ImportError, AttributeError) as e:
+            print(f"  [ClassifierCallback] W&B logging failed: {e}", flush=True)
+
+        for res in results_by_key.values():
+            if res["fig"] is not None:
+                plt.close(res["fig"])
+
         for subtract_flag, normalize_flag, prefix, desc in variants:
             variant_tag = prefix.split("/")[-1].rstrip("_")
             res = results_by_key.get(variant_tag)
             if res is None:
                 continue
-            balanced_acc = res["bare_metrics"]["balanced_accuracy"]
-            if balanced_acc <= self._best_balanced_acc.get(variant_tag, 0.0):
-                continue
-            self._best_balanced_acc[variant_tag] = balanced_acc
-            ckpt_dir = self.output_dir / "checkpoints" / self.ckpt_subdir / variant_tag
-            ckpt_dir.mkdir(parents=True, exist_ok=True)
-            ckpt_path = ckpt_dir / "best_balanced_acc.ckpt"
-            trainer.save_checkpoint(str(ckpt_path))
-            emb_path = ckpt_dir / "embeddings_best_balanced_acc.pt"
-            torch.save(embeddings, emb_path)
+            m = res["bare_metrics"]
             print(
-                f"  [ClassifierCallback] New best balanced_acc={balanced_acc:.3f} "
-                f"({desc}) — saved checkpoint to {ckpt_path}\n"
-                f"  [ClassifierCallback] Saved embeddings to {emb_path}\n",
+                f"  [ClassifierCallback] Final ({tag}, {desc}): "
+                f"balanced_acc={m['balanced_accuracy']:.3f}  "
+                f"({int(m['num_classes'])} classes, {int(m['num_compounds'])} compounds)"
+                f"  | confusion matrix -> {res['cm_path']}",
                 flush=True,
             )
-
-        # ── Save best checkpoint + embeddings on best val batch-kNN accuracy ──
-        # `val_batch_knn_acc` is logged by ContrastiveExperiment (dino_lora).
-        # Skip when the metric is absent (e.g. VAE-family models). Checkpoint and
-        # embeddings are saved together so they stay in sync at the same epoch.
-        knn_metric = trainer.callback_metrics.get("val_batch_knn_acc")
-        if knn_metric is not None:
-            knn_acc = float(knn_metric)
-            if knn_acc > self._best_knn_acc:
-                self._best_knn_acc = knn_acc
-                knn_dir = (self.output_dir / "checkpoints" / self.ckpt_subdir
-                           / "best_val_knn_acc")
-                knn_dir.mkdir(parents=True, exist_ok=True)
-                ckpt_path = knn_dir / "best_val_knn_acc.ckpt"
-                trainer.save_checkpoint(str(ckpt_path))
-                emb_path = knn_dir / "embeddings_best_val_knn_acc.pt"
-                torch.save(embeddings, emb_path)
-                print(
-                    f"  [ClassifierCallback] New best val_batch_knn_acc={knn_acc:.3f} "
-                    f"— saved checkpoint to {ckpt_path}\n"
-                    f"  [ClassifierCallback] Saved embeddings to {emb_path}\n",
-                    flush=True,
-                )
+        print("", flush=True)
 
     def _evaluate_classifier_variant(
         self,
