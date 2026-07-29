@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
                              "which uses --contrastive_metadata instead.")
     parser.add_argument("--img_size", type=int, default=96, help="Square image size")
     parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--num_workers", type=int, default=12)
     parser.add_argument("--val_split", type=float, default=0.1)
     parser.add_argument("--index_cache", type=str, default=None,
                         help="Optional .npy path to cache the scanned image list "
