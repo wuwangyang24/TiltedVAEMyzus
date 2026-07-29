@@ -282,35 +282,84 @@ def main() -> None:
         metadata = json.load(f)
     print(f"Metadata: {len(metadata)} compounds")
 
-    embeddings = {}
-    for entry in tqdm(metadata, desc="Encoding compounds"):
+    # ── Collect all image paths first, then encode in large contiguous batches ─
+    # This avoids per-compound tiny batches that starve the GPU.
+    all_paths: List[str] = []
+    path_to_global_idx: dict = {}  # rel_path -> index in all_paths
+
+    # Track structure: (compound_id, plate_id, "treated"/"control", [global_indices])
+    structure: List[tuple] = []
+
+    for entry in metadata:
         compound_id = str(entry["Compound"])
-        plate_dict = {}
         for plate_id, plate_data in entry.items():
             if plate_id == "Compound":
                 continue
-            treated_paths = plate_data.get("treated", [])
-            control_paths = plate_data.get("control", [])
+            for role in ("treated", "control"):
+                paths = plate_data.get(role, [])
+                if not paths:
+                    continue
+                indices = []
+                for p in paths:
+                    if p not in path_to_global_idx:
+                        path_to_global_idx[p] = len(all_paths)
+                        all_paths.append(p)
+                    indices.append(path_to_global_idx[p])
+                structure.append((compound_id, str(plate_id), role, indices))
 
-            plate_entry = {}
-            if treated_paths:
-                plate_entry["treated"] = encode_paths(
-                    treated_paths, root_dir, model, transform, mode,
-                    args.batch_size, device, use_fp16=args.fp16,
-                )
-            if control_paths:
-                control_latents = encode_paths(
-                    control_paths, root_dir, model, transform, mode,
-                    args.batch_size, device, use_fp16=args.fp16,
-                )
-                if control_latents.numel() > 0:
-                    plate_entry["control"] = control_latents.mean(dim=0)
+    print(f"Total images to encode: {len(all_paths)}")
 
-            if plate_entry:
-                plate_dict[str(plate_id)] = plate_entry
+    # ── Encode all images in large batches ───────────────────────────────────
+    all_embeddings = torch.zeros(len(all_paths), 1)  # placeholder
+    encoded_mask = np.zeros(len(all_paths), dtype=bool)
 
-        if plate_dict:
-            embeddings[compound_id] = plate_dict
+    latent_chunks: List[Tuple[int, torch.Tensor]] = []
+    for start in tqdm(range(0, len(all_paths), args.batch_size),
+                      desc="Encoding images",
+                      total=(len(all_paths) + args.batch_size - 1) // args.batch_size):
+        batch_paths = all_paths[start:start + args.batch_size]
+        imgs = []
+        valid_indices = []
+        for i, rel in enumerate(batch_paths):
+            full_path = root_dir / rel
+            if not full_path.exists():
+                continue
+            img = read_image(str(full_path), mode=mode)
+            imgs.append(transform(img))
+            valid_indices.append(start + i)
+        if not imgs:
+            continue
+        batch = torch.stack(imgs, dim=0).to(device)
+        with torch.autocast(device_type=device.type, enabled=args.fp16):
+            out = model.encode(batch)
+        mu = out if isinstance(out, torch.Tensor) else out[0]
+        mu = mu.float().cpu()
+        latent_chunks.append((valid_indices, mu))
+
+    # Assemble into a single tensor
+    if latent_chunks:
+        dim = latent_chunks[0][1].size(1)
+        all_embeddings = torch.zeros(len(all_paths), dim)
+        for valid_indices, mu in latent_chunks:
+            for local_i, global_i in enumerate(valid_indices):
+                all_embeddings[global_i] = mu[local_i]
+                encoded_mask[global_i] = True
+
+    # ── Reassemble per-compound structure ────────────────────────────────────
+    embeddings = {}
+    for compound_id, plate_id, role, indices in structure:
+        valid = [i for i in indices if encoded_mask[i]]
+        if not valid:
+            continue
+        emb = all_embeddings[valid]
+        if compound_id not in embeddings:
+            embeddings[compound_id] = {}
+        if plate_id not in embeddings[compound_id]:
+            embeddings[compound_id][plate_id] = {}
+        if role == "treated":
+            embeddings[compound_id][plate_id]["treated"] = emb
+        else:
+            embeddings[compound_id][plate_id]["control"] = emb.mean(dim=0)
 
     # ── Save ─────────────────────────────────────────────────────────────────
     out_path = Path(args.output)
