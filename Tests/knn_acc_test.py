@@ -370,6 +370,7 @@ def main() -> None:
 
     # Run trials with different random seeds
     results_per_k: Dict[int, List[float]] = {k: [] for k in args.topk}
+    ci_per_k: Dict[int, List[Tuple[float, float, float]]] = {k: [] for k in args.topk}
 
     for trial in range(args.n_trials):
         trial_seed = args.seed + trial
@@ -389,13 +390,10 @@ def main() -> None:
             continue
 
         n_unique = labels.unique().size(0)
-        print(f"Trial {trial + 1}: {embeddings.size(0)} images, "
-              f"{n_unique} compounds")
 
         for k in args.topk:
             acc = topk_knn_accuracy(embeddings, labels, k)
             results_per_k[k].append(acc)
-            print(f"  top-{k} KNN accuracy: {acc:.4f}")
 
         # Bootstrap CI by resampling compounds
         compound_ids = labels.numpy()
@@ -404,11 +402,8 @@ def main() -> None:
             n_bootstraps=args.n_bootstraps, ci_level=args.ci_level,
             seed=trial_seed,
         )
-        pct = int(args.ci_level * 100)
         for k in args.topk:
-            ci_mean, ci_lo, ci_hi = ci_results[k]
-            print(f"  top-{k} {pct}% CI (compound bootstrap): "
-                  f"[{ci_lo:.4f}, {ci_hi:.4f}]")
+            ci_per_k[k].append(ci_results[k])
 
     # Summary
     pct = int(args.ci_level * 100)
@@ -418,7 +413,13 @@ def main() -> None:
         vals = results_per_k[k]
         if vals:
             mean, std = np.mean(vals), np.std(vals)
-            print(f"  top-{k}: {mean:.4f} +/- {std:.4f}")
+            # Average CI bounds across trials
+            ci_los = [ci[1] for ci in ci_per_k[k]]
+            ci_his = [ci[2] for ci in ci_per_k[k]]
+            ci_lo = np.mean(ci_los)
+            ci_hi = np.mean(ci_his)
+            print(f"  top-{k}: {mean:.4f} +/- {std:.4f}  "
+                  f"{pct}% CI [{ci_lo:.4f}, {ci_hi:.4f}]")
         else:
             print(f"  top-{k}: no valid trials")
 
