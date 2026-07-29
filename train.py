@@ -340,13 +340,13 @@ def main() -> None:
 
     # Callbacks
     if is_dino:
-        targets_tag = "&".join(args.lora_targets)
+        targets_tag = "_".join(args.lora_targets)
         proj_tag = "Proj" if args.use_proj_head else "NoProj"
         p_val = args.contrastive_classes_per_batch
         k_val = args.contrastive_samples_per_class
         level_tag = "_Comp" if args.compound_level else ""
         ckpt_suffix = (
-            f"DINO_LoRA({targets_tag})"
+            f"DINO_LoRA_{targets_tag}"
             f"_R{args.lora_rank}_A{args.lora_alpha}"
             f"_P{p_val}_K{k_val}"
             f"_{proj_tag}"
