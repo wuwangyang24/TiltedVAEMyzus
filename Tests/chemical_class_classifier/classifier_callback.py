@@ -160,6 +160,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
         label_col: column name for the class label in the label CSV.
         subtract_control: subtract per-plate averaged control embedding.
         normalize_before_subtract: L2-normalize before subtraction.
+        normalize_after_subtract: L2-normalize after subtraction.
         min_compounds_per_class: drop classes with fewer compounds.
         test_split: fraction held out for evaluation.
         filter_by_efficacy: keep only compounds with Efficacy >= this value.
@@ -181,6 +182,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
         label_col: str = "synthesis_program",
         subtract_control: bool = False,
         normalize_before_subtract: bool = False,
+        normalize_after_subtract: bool = False,
         min_compounds_per_class: int = 30,
         test_split: float = 0.2,
         filter_by_efficacy: Optional[float] = 0,
@@ -203,6 +205,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
         self.label_col = label_col
         self.subtract_control = subtract_control
         self.normalize_before_subtract = normalize_before_subtract
+        self.normalize_after_subtract = normalize_after_subtract
         self.min_compounds_per_class = min_compounds_per_class
         self.test_split = test_split
         self.filter_by_efficacy = filter_by_efficacy
@@ -317,6 +320,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
             label2idx=str2idx,
             subtract_control=self.subtract_control,
             normalize_before_subtract=self.normalize_before_subtract,
+            normalize_after_subtract=self.normalize_after_subtract,
         )
 
         if X.shape[0] < 4:
@@ -592,6 +596,7 @@ class ChemicalClassClassifierCallback(pl.Callback):
             label2idx=str2idx,
             subtract_control=subtract_control,
             normalize_before_subtract=self.normalize_before_subtract,
+            normalize_after_subtract=self.normalize_after_subtract,
         )
 
         # Optionally L2-normalize the per-compound feature vectors.

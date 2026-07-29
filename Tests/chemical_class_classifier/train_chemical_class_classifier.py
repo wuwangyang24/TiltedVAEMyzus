@@ -115,6 +115,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--normalize_before_subtract", action="store_true",
                    help="L2-normalize treated and control embeddings before subtraction "
                         "(requires --subtract_control)")
+    p.add_argument("--normalize_after_subtract", action="store_true",
+                   help="L2-normalize treated embeddings after control subtraction "
+                        "(requires --subtract_control)")
     p.add_argument("--test_split", type=float, default=0.2,
                    help="Fraction of compounds held out for final evaluation. Default: 0.2")
     p.add_argument("--min_compounds_per_class", type=int, default=2,
@@ -274,6 +277,7 @@ def _run_catboost(
         label2idx=str2idx,
         subtract_control=args.subtract_control,
         normalize_before_subtract=args.normalize_before_subtract,
+        normalize_after_subtract=args.normalize_after_subtract,
     )
     print(f"  {X.shape[0]} compounds with valid features.")
     print(f"  Feature dim (D) : {X.shape[1]}")
@@ -422,6 +426,7 @@ def _run_catboost(
             f"Embeddings       : {args.embeddings}\n"
             f"Subtract control : {args.subtract_control}\n"
             f"Normalize before subtract : {args.normalize_before_subtract}\n"
+            f"Normalize after subtract  : {args.normalize_after_subtract}\n"
             f"Auto class weights : {auto_cw}\n\n"
         ),
         save_predictions=args.save_predictions,

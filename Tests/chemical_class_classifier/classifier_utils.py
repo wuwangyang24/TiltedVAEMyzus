@@ -39,6 +39,7 @@ def build_mean_latent_features(
     label2idx: Dict[str, int],
     subtract_control: bool = False,
     normalize_before_subtract: bool = False,
+    normalize_after_subtract: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     """
     Build a (num_compounds, D) feature matrix where each row is the mean
@@ -72,6 +73,8 @@ def build_mean_latent_features(
                     treated = _l2_normalize(treated)
                     control = _l2_normalize(control)
                 treated = treated - control.unsqueeze(0)
+                if normalize_after_subtract:
+                    treated = _l2_normalize(treated)
             plate_latents.append(treated.float())
 
         if not plate_latents:
