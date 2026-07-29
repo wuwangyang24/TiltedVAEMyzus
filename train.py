@@ -179,6 +179,8 @@ def parse_args() -> argparse.Namespace:
                         help="Drop classes with fewer compounds. Default: 30")
     parser.add_argument("--cls_cb_iterations", type=int, default=300,
                         help="CatBoost iterations for the callback classifier. Default: 300")
+    parser.add_argument("--disable_cls_callback", action="store_true",
+                        help="Disable periodic chemical-class classifier evaluation during training")
 
     # Post-training embedding encoding (100ppm / 20ppm)
     parser.add_argument("--emb_metadata_100ppm", type=str,
@@ -382,7 +384,8 @@ def main() -> None:
     # Optional: chemical-class classifier callback (VAE-family models only)
     # Optional: chemical-class classifier callback (works for both the VAE
     # encoders and the DINOv2+LoRA embedding model).
-    if (args.cls_image_metadata and args.cls_label_metadata
+    if (not args.disable_cls_callback
+            and args.cls_image_metadata and args.cls_label_metadata
             and args.cls_root_dir):
         cls_callback = ChemicalClassClassifierCallback(
             image_metadata_json=args.cls_image_metadata,
