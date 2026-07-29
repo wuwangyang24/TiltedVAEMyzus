@@ -122,6 +122,8 @@ def parse_args() -> argparse.Namespace:
                    help="Disable projection head (output backbone features directly)")
 
     p.add_argument("--batch_size", type=int, default=64)
+    p.add_argument("--fp16", action="store_true",
+                   help="Use mixed-precision (fp16) inference for faster encoding on GPU")
     p.add_argument("--device", default=None,
                    help="Torch device (default: cuda if available else cpu)")
 
@@ -216,6 +218,7 @@ def encode_paths(
     mode: ImageReadMode,
     batch_size: int,
     device: torch.device,
+    use_fp16: bool = False,
 ) -> torch.Tensor:
     """Encode a list of image paths to a (N, D) float32 CPU tensor of latent means."""
     latents: List[torch.Tensor] = []
@@ -231,10 +234,11 @@ def encode_paths(
         if not imgs:
             continue
         batch = torch.stack(imgs, dim=0).to(device)
-        out = model.encode(batch)
+        with torch.autocast(device_type=device.type, enabled=use_fp16):
+            out = model.encode(batch)
         # DinoV2LoRA.encode() returns a single tensor; VAE/TiltedVAE return (mu, log_var)
         mu = out if isinstance(out, torch.Tensor) else out[0]
-        latents.append(mu.cpu())
+        latents.append(mu.float().cpu())
     return torch.cat(latents, dim=0) if latents else torch.empty(0)
 
 
@@ -292,12 +296,12 @@ def main() -> None:
             if treated_paths:
                 plate_entry["treated"] = encode_paths(
                     treated_paths, root_dir, model, transform, mode,
-                    args.batch_size, device,
+                    args.batch_size, device, use_fp16=args.fp16,
                 )
             if control_paths:
                 control_latents = encode_paths(
                     control_paths, root_dir, model, transform, mode,
-                    args.batch_size, device,
+                    args.batch_size, device, use_fp16=args.fp16,
                 )
                 if control_latents.numel() > 0:
                     plate_entry["control"] = control_latents.mean(dim=0)
