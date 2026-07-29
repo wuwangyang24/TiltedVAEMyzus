@@ -222,19 +222,28 @@ class DinoV2LoRA(nn.Module):
             loss = torch.zeros((), device=device, requires_grad=True)
 
         with torch.no_grad():
+            knn_accs = self._batch_knn_accuracy(logits, labels, self_mask)
             metrics = {
                 "InfoNCE": loss.detach(),
                 "pos_fraction": valid.float().mean(),
-                "batch_knn_acc": self._batch_knn_accuracy(logits, labels, self_mask),
+                **knn_accs,
             }
         return {"loss": loss, **metrics}
 
     @staticmethod
     @torch.no_grad()
     def _batch_knn_accuracy(logits: Tensor, labels: Tensor,
-                            self_mask: Tensor) -> Tensor:
-        """Fraction of anchors whose nearest in-batch neighbour shares its label."""
+                            self_mask: Tensor) -> dict:
+        """Top-1/3/5 fraction of anchors whose nearest neighbours share their label."""
         masked = logits.masked_fill(self_mask.bool(), float("-inf"))
-        nn_idx = masked.argmax(dim=1)
         labels = labels.view(-1)
-        return (labels[nn_idx] == labels).float().mean()
+        n = labels.size(0)
+        result = {}
+        for k, suffix in ((1, "batch_knn_acc"), (3, "batch_knn_top3_acc"), (5, "batch_knn_top5_acc")):
+            if k >= n:
+                result[suffix] = torch.tensor(1.0, device=logits.device)
+                continue
+            topk_idx = masked.topk(k, dim=1).indices
+            hits = (labels[topk_idx] == labels.unsqueeze(1)).any(dim=1)
+            result[suffix] = hits.float().mean()
+        return result
