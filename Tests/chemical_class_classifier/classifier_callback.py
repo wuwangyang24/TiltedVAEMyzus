@@ -25,7 +25,6 @@ import pandas as pd
 import torch
 import torchvision.transforms as T
 from torchvision.io import ImageReadMode, read_image
-from tqdm import tqdm
 
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader, Dataset
@@ -98,15 +97,16 @@ def _encode_paths(
     mode: ImageReadMode,
     batch_size: int,
     device: torch.device,
+    num_workers: int = 0,
 ) -> torch.Tensor:
     """Encode a list of image paths to a (N, D) float32 CPU tensor of latent means."""
     ds = _ImagePathDataset(rel_paths, root_dir, mode, transform)
     loader = DataLoader(
         ds,
         batch_size=batch_size,
-        num_workers=_NUM_WORKERS,
+        num_workers=num_workers,
         collate_fn=_collate_skip_none,
-        pin_memory=True,
+        pin_memory=num_workers > 0,
         persistent_workers=False,
     )
     latents: List[torch.Tensor] = []
@@ -132,47 +132,78 @@ def _encode_all_compounds(
     device: torch.device,
     normalize_imagenet: bool = False,
 ) -> Dict:
-    """Encode all compounds from metadata JSON into the embeddings dict format."""
+    """Encode all compounds from metadata JSON into the embeddings dict format.
+
+    All images are collected and encoded in a single DataLoader pass to avoid
+    the overhead of spawning workers per compound.
+    """
     tfm = [
         T.Resize((img_size, img_size), antialias=True),
         T.ConvertImageDtype(torch.float32),
     ]
-    # DINOv2-based models were trained on ImageNet-normalized inputs; match that
-    # here so callback embeddings are consistent with training.
     if normalize_imagenet:
         tfm.append(T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD))
     transform = T.Compose(tfm)
     mode = ImageReadMode.GRAY if in_channels == 1 else ImageReadMode.RGB
 
-    embeddings = {}
-    for entry in tqdm(metadata, desc="  [ClassifierCallback] Encoding compounds", leave=False):
+    # Collect all image paths with their (compound, plate, subset) keys.
+    all_paths: List[str] = []
+    # Each entry: (compound_id, plate_id, subset, start_idx, count)
+    index_map: List[tuple] = []
+
+    for entry in metadata:
         compound_id = str(entry["Compound"])
-        plate_dict = {}
         for plate_id, plate_data in entry.items():
             if plate_id == "Compound":
                 continue
-            treated_paths = plate_data.get("treated", [])
-            control_paths = plate_data.get("control", [])
+            for subset in ("treated", "control"):
+                paths = plate_data.get(subset, [])
+                if paths:
+                    start = len(all_paths)
+                    all_paths.extend(paths)
+                    index_map.append((compound_id, str(plate_id), subset, start, len(paths)))
 
-            plate_entry = {}
-            if treated_paths:
-                plate_entry["treated"] = _encode_paths(
-                    treated_paths, root_dir, model, transform, mode,
-                    batch_size, device,
-                )
-            if control_paths:
-                control_latents = _encode_paths(
-                    control_paths, root_dir, model, transform, mode,
-                    batch_size, device,
-                )
-                if control_latents.numel() > 0:
-                    plate_entry["control"] = control_latents.mean(dim=0)
+    if not all_paths:
+        return {}
 
-            if plate_entry:
-                plate_dict[str(plate_id)] = plate_entry
+    # Filter to only existing paths so we can track exact positions.
+    valid_indices: List[int] = []
+    valid_paths: List[str] = []
+    for i, p in enumerate(all_paths):
+        if (root_dir / p).exists():
+            valid_indices.append(i)
+            valid_paths.append(p)
 
-        if plate_dict:
-            embeddings[compound_id] = plate_dict
+    print(
+        f"  [ClassifierCallback] Encoding {len(valid_paths)}/{len(all_paths)} images "
+        f"in a single pass ...", flush=True,
+    )
+
+    # Encode all valid images in one DataLoader pass with workers.
+    latent_tensors = _encode_paths(
+        valid_paths, root_dir, model, transform, mode, batch_size, device,
+        num_workers=_NUM_WORKERS,
+    )
+
+    # Map encoded positions back to original flat indices.
+    latent_by_idx: Dict[int, torch.Tensor] = {}
+    for j, orig_idx in enumerate(valid_indices):
+        latent_by_idx[orig_idx] = latent_tensors[j]
+
+    # Scatter results back into the compound/plate/subset structure.
+    embeddings: Dict = {}
+    for compound_id, plate_id, subset, start, count in index_map:
+        feats_list = [latent_by_idx[i] for i in range(start, start + count)
+                      if i in latent_by_idx]
+        if not feats_list:
+            continue
+        feats = torch.stack(feats_list)
+        plate_dict = embeddings.setdefault(compound_id, {})
+        plate_entry = plate_dict.setdefault(plate_id, {})
+        if subset == "treated":
+            plate_entry["treated"] = feats
+        else:
+            plate_entry["control"] = feats.mean(dim=0)
 
     return embeddings
 
