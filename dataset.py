@@ -465,6 +465,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
         self.train_dataset = ContrastiveImageDataset(train_samples, transform)
         self.val_dataset = ContrastiveImageDataset(val_samples, transform)
         self._train_labels = [label for _, label in train_samples]
+        self._val_labels = [label for _, label in val_samples]
         print(
             f"[ContrastiveDataModule] {len(samples)} images, "
             f"{self.num_classes} "
@@ -500,6 +501,20 @@ class ContrastiveDataModule(pl.LightningDataModule):
         )
 
     def val_dataloader(self) -> DataLoader:
+        if self.use_pk_sampler:
+            batch_sampler = PKBatchSampler(
+                labels=self._val_labels,
+                classes_per_batch=self.classes_per_batch,
+                samples_per_class=self.samples_per_class,
+                seed=self.seed,
+            )
+            return DataLoader(
+                self.val_dataset,
+                batch_sampler=batch_sampler,
+                num_workers=self.num_workers,
+                pin_memory=True,
+                persistent_workers=self.num_workers > 0,
+            )
         return DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
