@@ -372,10 +372,13 @@ class ContrastiveDataModule(pl.LightningDataModule):
             paths = [paths]
         metadata = []
         for p in paths:
+            print(f"[ContrastiveDataModule] Loading metadata: {p} ...", flush=True)
             with open(p) as f:
                 metadata.extend(json.load(f))
+        print(f"[ContrastiveDataModule] Loaded {len(metadata)} entries from {len(paths)} file(s)", flush=True)
 
         comp2label = self._load_compound_labels()
+        print(f"[ContrastiveDataModule] Label map: {len(comp2label)} compounds", flush=True)
         if not comp2label:
             raise RuntimeError(
                 "No compounds with valid synthesis-program labels remained after "
@@ -470,7 +473,8 @@ class ContrastiveDataModule(pl.LightningDataModule):
             f"[ContrastiveDataModule] {len(samples)} images, "
             f"{self.num_classes} "
             f"{'compounds' if self.compound_level else 'synthesis programs'} "
-            f"(train={len(train_samples)}, val={len(val_samples)})"
+            f"(train={len(train_samples)}, val={len(val_samples)})",
+            flush=True,
         )
 
     def train_dataloader(self) -> DataLoader:
