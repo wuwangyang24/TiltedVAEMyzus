@@ -12,10 +12,7 @@ Supports both pre-computed embeddings (from encode_embeddings.py) and on-the-fly
 encoding with a trained model checkpoint.
 
 Usage (pre-computed embeddings):
-    python Tests/knn_acc_test.py \
-        --metadata METADATA/metadata_compound_all100ppm.json \
-        --embedding results/checkpoints/.../embeddings.pt \
-        --n_compounds 50 --topk 1 5 10 --seed 42
+python TiltedVAEMyzus/Tests/knn_acc_test.py --metadata METADATA/metadata_compound_all100ppm.json --embedding results/checkpoints/DINO_LoRA(qkv&proj)_R32_A64_P64_K8_NoProj_T0.05_Comp/best_val_knn_acc/embeddings_best_val_knn_acc.pt --n_compounds 50 --topk 1 5 10 --seed 42
 
 Usage (on-the-fly encoding):
     python Tests/knn_acc_test.py \
@@ -356,7 +353,17 @@ def main() -> None:
             load_checkpoint(model, args.checkpoint)
         model.to(device).eval()
 
-    print(f"Metadata: {len(metadata)} compounds")
+    # When using pre-computed embeddings, filter metadata to only compounds
+    # present in the embedding file (typically the validation set) so that
+    # random selection draws from available compounds only.
+    if args.embedding is not None:
+        emb_data = torch.load(args.embedding, map_location="cpu", weights_only=False)
+        emb_compounds = set(emb_data.keys())
+        metadata = [e for e in metadata if str(e["Compound"]) in emb_compounds]
+        print(f"Metadata: {len(metadata)} compounds (filtered to embedding file)")
+    else:
+        print(f"Metadata: {len(metadata)} compounds")
+
     print(f"Selecting {args.n_compounds} compounds, top-k = {args.topk}, "
           f"trials = {args.n_trials}\n")
 
