@@ -211,14 +211,10 @@ def gather_embeddings_from_model(
 @torch.no_grad()
 def topk_knn_accuracy(
     embeddings: torch.Tensor, labels: torch.Tensor, k: int,
-) -> Tuple[float, np.ndarray]:
+) -> float:
     """Fraction of samples whose top-k nearest neighbours contain a same-label sample.
 
     Uses cosine similarity (embeddings are L2-normalized first).
-
-    Returns:
-        acc: overall top-k KNN accuracy.
-        hits: (N,) boolean array of per-sample hits (for bootstrap CI).
     """
     embeddings = torch.nn.functional.normalize(embeddings, dim=1)
     sim = embeddings @ embeddings.t()
@@ -228,33 +224,71 @@ def topk_knn_accuracy(
     n = embeddings.size(0)
     actual_k = min(k, n - 1)
     if actual_k < 1:
-        return 0.0, np.zeros(n, dtype=bool)
+        return 0.0
 
     _, topk_idx = sim.topk(actual_k, dim=1)  # (N, k)
     topk_labels = labels[topk_idx]            # (N, k)
     hits = (topk_labels == labels.unsqueeze(1)).any(dim=1)  # (N,)
-    hits_np = hits.cpu().numpy()
-    return float(hits.float().mean().item()), hits_np
+    return float(hits.float().mean().item())
 
 
-def bootstrap_ci(
-    hits: np.ndarray, n_bootstraps: int = 1000, ci_level: float = 0.95,
+def bootstrap_ci_by_compound(
+    embeddings: torch.Tensor,
+    labels: torch.Tensor,
+    compound_ids: np.ndarray,
+    topk: List[int],
+    n_bootstraps: int = 1000,
+    ci_level: float = 0.95,
     seed: int = 42,
-) -> Tuple[float, float, float]:
-    """Bootstrap confidence interval for mean accuracy from per-sample hits.
+) -> Dict[int, Tuple[float, float, float]]:
+    """Bootstrap confidence intervals by resampling compounds.
 
-    Returns (mean, lower, upper).
+    Each bootstrap iteration samples compounds with replacement, gathers all
+    their images, and recomputes top-k KNN accuracy. This respects the
+    within-compound correlation structure.
+
+    Returns {k: (mean, lower, upper)} for each k in topk.
     """
     rng = np.random.default_rng(seed)
-    n = len(hits)
-    boot_means = np.empty(n_bootstraps)
-    for i in range(n_bootstraps):
-        idx = rng.choice(n, size=n, replace=True)
-        boot_means[i] = hits[idx].mean()
+    unique_compounds = np.unique(compound_ids)
+    n_compounds = len(unique_compounds)
+
+    # Pre-compute per-compound image indices for speed
+    compound_to_idx: Dict[int, np.ndarray] = {}
+    for cid in unique_compounds:
+        compound_to_idx[cid] = np.where(compound_ids == cid)[0]
+
+    boot_accs: Dict[int, List[float]] = {k: [] for k in topk}
+
+    for _ in range(n_bootstraps):
+        # Resample compounds with replacement
+        sampled = rng.choice(unique_compounds, size=n_compounds, replace=True)
+
+        # Gather indices and build new contiguous labels
+        all_idx, new_labels = [], []
+        for new_lab, cid in enumerate(sampled):
+            idx = compound_to_idx[cid]
+            all_idx.append(idx)
+            new_labels.extend([new_lab] * len(idx))
+
+        all_idx = np.concatenate(all_idx)
+        boot_embs = embeddings[all_idx]
+        boot_labels = torch.tensor(new_labels, dtype=torch.long,
+                                   device=embeddings.device)
+
+        for k in topk:
+            boot_accs[k].append(topk_knn_accuracy(boot_embs, boot_labels, k))
+
     alpha = 1.0 - ci_level
-    lo = float(np.percentile(boot_means, 100 * alpha / 2))
-    hi = float(np.percentile(boot_means, 100 * (1 - alpha / 2)))
-    return float(np.mean(boot_means)), lo, hi
+    results = {}
+    for k in topk:
+        vals = np.array(boot_accs[k])
+        results[k] = (
+            float(vals.mean()),
+            float(np.percentile(vals, 100 * alpha / 2)),
+            float(np.percentile(vals, 100 * (1 - alpha / 2))),
+        )
+    return results
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
@@ -328,7 +362,6 @@ def main() -> None:
 
     # Run trials with different random seeds
     results_per_k: Dict[int, List[float]] = {k: [] for k in args.topk}
-    hits_per_k: Dict[int, List[np.ndarray]] = {k: [] for k in args.topk}
 
     for trial in range(args.n_trials):
         trial_seed = args.seed + trial
@@ -347,35 +380,37 @@ def main() -> None:
             print(f"Trial {trial + 1}: not enough images, skipping")
             continue
 
+        n_unique = labels.unique().size(0)
         print(f"Trial {trial + 1}: {embeddings.size(0)} images, "
-              f"{labels.unique().size(0)} compounds")
+              f"{n_unique} compounds")
 
         for k in args.topk:
-            acc, hits = topk_knn_accuracy(embeddings, labels, k)
+            acc = topk_knn_accuracy(embeddings, labels, k)
             results_per_k[k].append(acc)
-            hits_per_k[k].append(hits)
-            ci_mean, ci_lo, ci_hi = bootstrap_ci(
-                hits, n_bootstraps=args.n_bootstraps,
-                ci_level=args.ci_level, seed=trial_seed,
-            )
-            print(f"  top-{k} KNN accuracy: {acc:.4f}  "
-                  f"{int(args.ci_level * 100)}% CI [{ci_lo:.4f}, {ci_hi:.4f}]")
+            print(f"  top-{k} KNN accuracy: {acc:.4f}")
+
+        # Bootstrap CI by resampling compounds
+        compound_ids = labels.numpy()
+        ci_results = bootstrap_ci_by_compound(
+            embeddings, labels, compound_ids, args.topk,
+            n_bootstraps=args.n_bootstraps, ci_level=args.ci_level,
+            seed=trial_seed,
+        )
+        pct = int(args.ci_level * 100)
+        for k in args.topk:
+            ci_mean, ci_lo, ci_hi = ci_results[k]
+            print(f"  top-{k} {pct}% CI (compound bootstrap): "
+                  f"[{ci_lo:.4f}, {ci_hi:.4f}]")
 
     # Summary
     pct = int(args.ci_level * 100)
     print("\n" + "=" * 60)
-    print(f"Summary (mean ± std across trials, {pct}% bootstrap CI on pooled hits):")
+    print(f"Summary (mean +/- std across {args.n_trials} trial(s)):")
     for k in args.topk:
         vals = results_per_k[k]
         if vals:
             mean, std = np.mean(vals), np.std(vals)
-            pooled = np.concatenate(hits_per_k[k])
-            _, ci_lo, ci_hi = bootstrap_ci(
-                pooled, n_bootstraps=args.n_bootstraps,
-                ci_level=args.ci_level, seed=args.seed,
-            )
-            print(f"  top-{k}: {mean:.4f} ± {std:.4f}  "
-                  f"CI [{ci_lo:.4f}, {ci_hi:.4f}]")
+            print(f"  top-{k}: {mean:.4f} +/- {std:.4f}")
         else:
             print(f"  top-{k}: no valid trials")
 
