@@ -34,6 +34,7 @@ import numpy as np
 import torch
 import torchvision.transforms as T
 from torchvision.io import ImageReadMode, read_image
+from tqdm import tqdm
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
@@ -372,7 +373,7 @@ def main() -> None:
     results_per_k: Dict[int, List[float]] = {k: [] for k in args.topk}
     ci_per_k: Dict[int, List[Tuple[float, float, float]]] = {k: [] for k in args.topk}
 
-    for trial in range(args.n_trials):
+    for trial in tqdm(range(args.n_trials), desc="Trials", disable=args.n_trials == 1):
         trial_seed = args.seed + trial
         selected = select_compounds(metadata, args.n_compounds, trial_seed)
 
