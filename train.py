@@ -381,11 +381,12 @@ def main() -> None:
         )
         callbacks.append(knn_checkpoint_callback)
 
-    # Optional: chemical-class classifier callback (VAE-family models only)
     # Optional: chemical-class classifier callback (works for both the VAE
     # encoders and the DINOv2+LoRA embedding model).
-    if (not args.disable_cls_callback
-            and args.cls_image_metadata and args.cls_label_metadata
+    # Always instantiate when args are provided (needed for post-training eval);
+    # only add to trainer callbacks when periodic evaluation is enabled.
+    cls_callback = None
+    if (args.cls_image_metadata and args.cls_label_metadata
             and args.cls_root_dir):
         cls_callback = ChemicalClassClassifierCallback(
             image_metadata_json=args.cls_image_metadata,
@@ -408,8 +409,11 @@ def main() -> None:
             ckpt_subdir=ckpt_suffix,
             normalize_imagenet=is_dino,
         )
-        callbacks.append(cls_callback)
-        print(f"[ClassifierCallback] Enabled — evaluating every {args.cls_every_n_epochs} epochs")
+        if not args.disable_cls_callback:
+            callbacks.append(cls_callback)
+            print(f"[ClassifierCallback] Enabled — evaluating every {args.cls_every_n_epochs} epochs")
+        else:
+            print("[ClassifierCallback] Periodic evaluation disabled; will run post-training only")
 
     # Trainer
     # Parse --devices: "auto" stays as-is; comma-separated digits become a
@@ -437,12 +441,6 @@ def main() -> None:
     best_ckpts = [("best_val_loss", checkpoint_callback.best_model_path)]
     if is_dino:
         best_ckpts.append(("best_val_knn_acc", knn_checkpoint_callback.best_model_path))
-
-    cls_callback = None
-    for cb in callbacks:
-        if isinstance(cb, ChemicalClassClassifierCallback):
-            cls_callback = cb
-            break
 
     emb_metadata_files = []
     if args.emb_metadata_100ppm:
