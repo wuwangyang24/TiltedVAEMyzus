@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
+from tqdm.auto import tqdm
 import torchvision.transforms as T
 from torchvision.io import ImageReadMode, read_image
 
@@ -110,7 +111,7 @@ def _encode_paths(
         persistent_workers=False,
     )
     latents: List[torch.Tensor] = []
-    for batch in loader:
+    for batch in tqdm(loader, desc="Encoding batches"):
         if batch is None:
             continue
         batch = batch.to(device, non_blocking=True)
