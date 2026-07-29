@@ -394,10 +394,18 @@ def main() -> None:
         print(f"[ClassifierCallback] Enabled — evaluating every {args.cls_every_n_epochs} epochs")
 
     # Trainer
+    # Parse --devices: "auto" stays as-is; comma-separated digits become a
+    # list of ints so Lightning selects the right GPU(s) (e.g. "0" -> [0]).
+    devices = args.devices
+    if devices != "auto":
+        try:
+            devices = [int(d) for d in devices.split(",")]
+        except ValueError:
+            pass  # let Lightning handle unexpected values
     trainer = pl.Trainer(
         max_epochs=args.epochs,
         accelerator=args.accelerator,
-        devices=args.devices,
+        devices=devices,
         precision=args.precision,
         logger=wandb_logger,
         callbacks=callbacks,
