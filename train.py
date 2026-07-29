@@ -1,5 +1,7 @@
 import argparse
+import json
 import os
+from pathlib import Path
 
 import torch
 import pytorch_lightning as pl
@@ -177,6 +179,16 @@ def parse_args() -> argparse.Namespace:
                         help="Drop classes with fewer compounds. Default: 30")
     parser.add_argument("--cls_cb_iterations", type=int, default=300,
                         help="CatBoost iterations for the callback classifier. Default: 300")
+
+    # Post-training embedding encoding (100ppm / 20ppm)
+    parser.add_argument("--emb_metadata_100ppm", type=str,
+                        default="METADATA/metadata_compound_all100ppm.json",
+                        help="JSON metadata for encoding 100ppm embeddings after training")
+    parser.add_argument("--emb_metadata_20ppm", type=str,
+                        default="METADATA/metadata_compound_all20ppm.json",
+                        help="JSON metadata for encoding 20ppm embeddings after training")
+    parser.add_argument("--emb_root_dir", type=str, default="DATA_TEST/",
+                        help="Root directory for image paths in embedding metadata")
 
     return parser.parse_args()
 
@@ -418,17 +430,26 @@ def main() -> None:
 
     trainer.fit(experiment, datamodule=datamodule)
 
-    # ── Post-training: evaluate best checkpoints with chemical-class classifier ──
+    # ── Post-training: evaluate best checkpoints and encode embeddings ────────
+    best_ckpts = [("best_val_loss", checkpoint_callback.best_model_path)]
+    if is_dino:
+        best_ckpts.append(("best_val_knn_acc", knn_checkpoint_callback.best_model_path))
+
     cls_callback = None
     for cb in callbacks:
         if isinstance(cb, ChemicalClassClassifierCallback):
             cls_callback = cb
             break
 
-    if cls_callback is not None:
-        best_ckpts = [("best_val_loss", checkpoint_callback.best_model_path)]
-        if is_dino:
-            best_ckpts.append(("best_val_knn_acc", knn_checkpoint_callback.best_model_path))
+    emb_metadata_files = []
+    if args.emb_metadata_100ppm:
+        emb_metadata_files.append(("100ppm", args.emb_metadata_100ppm))
+    if args.emb_metadata_20ppm:
+        emb_metadata_files.append(("20ppm", args.emb_metadata_20ppm))
+    need_ppm = emb_metadata_files and args.emb_root_dir
+
+    if cls_callback is not None or need_ppm:
+        from Tests.chemical_class_classifier.classifier_callback import _encode_all_compounds
 
         for tag, ckpt_path in best_ckpts:
             if not ckpt_path or not os.path.exists(ckpt_path):
@@ -437,7 +458,36 @@ def main() -> None:
             print(f"\n  [PostTraining] Loading {tag} checkpoint: {ckpt_path}", flush=True)
             ckpt = torch.load(ckpt_path, weights_only=False)
             experiment.load_state_dict(ckpt["state_dict"])
-            cls_callback.run_final_evaluation(trainer, experiment, tag)
+
+            if cls_callback is not None:
+                cls_callback.run_final_evaluation(trainer, experiment, tag)
+
+            if need_ppm:
+                model = experiment.model
+                model.eval()
+                device = next(model.parameters()).device
+                for conc_tag, metadata_path in emb_metadata_files:
+                    with open(metadata_path) as f:
+                        metadata = json.load(f)
+                    embs = _encode_all_compounds(
+                        metadata=metadata,
+                        root_dir=Path(args.emb_root_dir),
+                        model=model,
+                        img_size=args.img_size,
+                        in_channels=args.in_channels,
+                        batch_size=args.batch_size,
+                        device=device,
+                        normalize_imagenet=is_dino,
+                    )
+                    emb_dir = Path(args.output_dir) / "checkpoints" / ckpt_suffix / tag
+                    emb_dir.mkdir(parents=True, exist_ok=True)
+                    emb_path = emb_dir / f"embeddings_{conc_tag}.pt"
+                    torch.save(embs, emb_path)
+                    print(
+                        f"  [PostTraining] Saved {conc_tag} embeddings "
+                        f"({len(embs)} compounds) to {emb_path}",
+                        flush=True,
+                    )
 
 
 if __name__ == "__main__":
