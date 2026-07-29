@@ -12,6 +12,7 @@ At the end of a validation epoch (every ``eval_every_n_epochs``), the callback:
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -27,6 +28,7 @@ from torchvision.io import ImageReadMode, read_image
 from tqdm import tqdm
 
 import pytorch_lightning as pl
+from torch.utils.data import DataLoader, Dataset
 
 # Ensure sibling modules are importable when the callback is used from the
 # repo root (train.py).
@@ -56,6 +58,37 @@ except ImportError:
 # Encoding helper
 # ═══════════════════════════════════════════════════════════════════════════════
 
+class _ImagePathDataset(Dataset):
+    """Dataset that loads images by relative path for use with DataLoader workers."""
+
+    def __init__(self, rel_paths: List[str], root_dir: Path, mode: ImageReadMode, transform: T.Compose):
+        self.rel_paths = rel_paths
+        self.root_dir = root_dir
+        self.mode = mode
+        self.transform = transform
+
+    def __len__(self) -> int:
+        return len(self.rel_paths)
+
+    def __getitem__(self, idx: int):
+        full_path = self.root_dir / self.rel_paths[idx]
+        if not full_path.exists():
+            return None
+        img = read_image(str(full_path), mode=self.mode)
+        return self.transform(img)
+
+
+def _collate_skip_none(batch):
+    """Collate that drops None entries (missing files)."""
+    imgs = [x for x in batch if x is not None]
+    if not imgs:
+        return None
+    return torch.stack(imgs, dim=0)
+
+
+_NUM_WORKERS = min(8, os.cpu_count() or 1)
+
+
 @torch.no_grad()
 def _encode_paths(
     rel_paths: List[str],
@@ -67,19 +100,20 @@ def _encode_paths(
     device: torch.device,
 ) -> torch.Tensor:
     """Encode a list of image paths to a (N, D) float32 CPU tensor of latent means."""
+    ds = _ImagePathDataset(rel_paths, root_dir, mode, transform)
+    loader = DataLoader(
+        ds,
+        batch_size=batch_size,
+        num_workers=_NUM_WORKERS,
+        collate_fn=_collate_skip_none,
+        pin_memory=True,
+        persistent_workers=False,
+    )
     latents: List[torch.Tensor] = []
-    for start in range(0, len(rel_paths), batch_size):
-        batch_paths = rel_paths[start:start + batch_size]
-        imgs = []
-        for rel in batch_paths:
-            full_path = root_dir / rel
-            if not full_path.exists():
-                continue
-            img = read_image(str(full_path), mode=mode)
-            imgs.append(transform(img))
-        if not imgs:
+    for batch in loader:
+        if batch is None:
             continue
-        batch = torch.stack(imgs, dim=0).to(device)
+        batch = batch.to(device, non_blocking=True)
         # VAE encoders return (mu, log_var); embedding models (e.g. DINOv2+LoRA)
         # return a single feature tensor. Support both.
         out = model.encode(batch)
