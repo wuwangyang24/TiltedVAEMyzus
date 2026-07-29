@@ -360,6 +360,7 @@ def main() -> None:
         emb_data = torch.load(args.embedding, map_location="cpu", weights_only=False)
         emb_compounds = set(emb_data.keys())
         metadata = [e for e in metadata if str(e["Compound"]) in emb_compounds]
+        print(f"Embedding file: {len(emb_compounds)} compounds in total")
         print(f"Metadata: {len(metadata)} compounds (filtered to embedding file)")
     else:
         print(f"Metadata: {len(metadata)} compounds")
