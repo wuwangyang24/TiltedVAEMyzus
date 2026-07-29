@@ -38,6 +38,9 @@ python TiltedVAEMyzus/Tests/efficacy500_classifier/encode_embeddings.py --metada
 
 Usage (DINOv2 pretrained):
 python TiltedVAEMyzus/Tests/efficacy500_classifier/encode_embeddings.py --metadata METADATA/metadata_compound_all20ppm.json --root_dir DATA_TEST/ --output TiltedVAEMyzus/Tests/efficacy500_classifier/embeddings_dino_20ppm.pt --model dino --device cpu
+
+Usage (DinoV2LoRA):
+python TiltedVAEMyzus/Tests/efficacy500_classifier/encode_embeddings.py --metadata METADATA/metadata_compound_all100ppm.json --root_dir DATA_TEST/ --output embeddings_dino_lora.pt --checkpoint results/checkpoints/DINO_LoRA/best_val_knn_acc.ckpt --model dino_lora --dino_backbone vit_small_patch14_dinov2 --embedding_dim 256 --lora_rank 32 --lora_alpha 64 --lora_targets qkv proj --no_proj_head --img_size 224 --device cuda
 """
 
 import argparse
