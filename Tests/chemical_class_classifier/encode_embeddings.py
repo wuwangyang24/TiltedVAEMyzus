@@ -132,6 +132,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--min_compounds_per_class", type=int, default=None,
                    help="Only encode compounds belonging to classes with at least this "
                         "many compounds. Requires --class_metadata.")
+    p.add_argument("--filter_by_efficacy", type=float, default=0,
+                   help="Keep only compounds with Efficacy >= this value (requires "
+                        "an 'Efficacy' column in --class_metadata). Default: 0")
 
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--device", default=None,
@@ -287,10 +290,12 @@ def main() -> None:
         metadata = json.load(f)
     print(f"Metadata: {len(metadata)} compounds")
 
-    # ── Pre-filter by min_compounds_per_class ────────────────────────────────
-    if args.min_compounds_per_class is not None:
+    # ── Pre-filter by efficacy and min_compounds_per_class ────────────────
+    if (args.min_compounds_per_class is not None
+            or (args.filter_by_efficacy and args.filter_by_efficacy > 0)):
         if args.class_metadata is None:
-            raise ValueError("--class_metadata is required when using --min_compounds_per_class")
+            raise ValueError("--class_metadata is required when using "
+                             "--min_compounds_per_class or --filter_by_efficacy")
         ext = Path(args.class_metadata).suffix.lower()
         if ext in (".xls", ".xlsx"):
             class_df = pd.read_excel(args.class_metadata)
@@ -299,23 +304,30 @@ def main() -> None:
         class_df[args.compound_col] = class_df[args.compound_col].astype(str)
         class_df[args.label_col] = class_df[args.label_col].astype(str)
 
-        # Count unique compounds per class and keep only classes meeting the threshold
-        # (matches the callback's _get_valid_compound_ids which counts from CSV only)
-        min_cpc = max(args.min_compounds_per_class, 2)
-        compounds_per_class = (
-            class_df.groupby(args.label_col)[args.compound_col].nunique()
-        )
-        valid_classes = set(
-            compounds_per_class[compounds_per_class >= min_cpc].index
-        )
-        valid_compounds: Set[str] = set(
-            class_df.loc[class_df[args.label_col].isin(valid_classes), args.compound_col]
-        )
+        if args.filter_by_efficacy and "Efficacy" in class_df.columns:
+            before_eff = len(class_df)
+            class_df = class_df[class_df["Efficacy"] >= args.filter_by_efficacy]
+            print(f"Efficacy filter: kept {len(class_df)}/{before_eff} rows "
+                  f"(Efficacy >= {args.filter_by_efficacy})")
+
+        valid_compounds: Optional[Set[str]] = None
+        if args.min_compounds_per_class is not None:
+            min_cpc = max(args.min_compounds_per_class, 2)
+            compounds_per_class = (
+                class_df.groupby(args.label_col)[args.compound_col].nunique()
+            )
+            valid_classes = set(
+                compounds_per_class[compounds_per_class >= min_cpc].index
+            )
+            valid_compounds = set(
+                class_df.loc[class_df[args.label_col].isin(valid_classes), args.compound_col]
+            )
+        else:
+            valid_compounds = set(class_df[args.compound_col])
 
         before = len(metadata)
         metadata = [e for e in metadata if str(e["Compound"]) in valid_compounds]
-        print(f"Pre-filter: kept {len(metadata)}/{before} compounds "
-              f"({len(valid_classes)} classes with >= {args.min_compounds_per_class} compounds)")
+        print(f"Pre-filter: kept {len(metadata)}/{before} compounds")
 
     embeddings = {}
     for entry in tqdm(metadata, desc="Encoding compounds"):
