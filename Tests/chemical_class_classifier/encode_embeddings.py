@@ -61,7 +61,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from Models import VAE, TiltedVAE
+from Models import VAE, TiltedVAE, DinoV2LoRA
 
 
 class DinoV2Wrapper(torch.nn.Module):
@@ -92,13 +92,33 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--checkpoint", default=None,
                    help="Trained Lightning checkpoint (.ckpt) or raw state_dict (.pt/.pth). "
                         "Not required for --model dino.")
-    p.add_argument("--model", default="tilted", choices=["vae", "tilted", "dino"],
-                   help="Model architecture. 'dino' uses pretrained DINOv2 vits14. Default: tilted")
+    p.add_argument("--model", default="tilted", choices=["vae", "tilted", "dino", "dino_lora"],
+                   help="Model architecture. 'dino' uses pretrained DINOv2 vits14. "
+                        "'dino_lora' uses DinoV2LoRA with a checkpoint. Default: tilted")
     p.add_argument("--in_channels", type=int, default=3)
     p.add_argument("--latent_dim", type=int, default=128)
-    p.add_argument("--img_size", type=int, default=96)
+    p.add_argument("--img_size", type=int, default=96,
+                   help="Image size for VAE/TiltedVAE. Ignored for dino (uses 224). "
+                        "For dino_lora must be a multiple of 14 (default 224).")
     p.add_argument("--tau", type=float, default=None,
                    help="Tilt parameter for TiltedVAE (only used with --model tilted)")
+
+    # DinoV2LoRA-specific arguments
+    p.add_argument("--dino_backbone", type=str, default="vit_small_patch14_dinov2",
+                   help="DINOv2 backbone variant for dino_lora")
+    p.add_argument("--embedding_dim", type=int, default=256,
+                   help="Output embedding dimension for dino_lora")
+    p.add_argument("--proj_hidden_dim", type=int, default=2048,
+                   help="Projection head hidden dim for dino_lora")
+    p.add_argument("--lora_rank", type=int, default=8, help="LoRA rank")
+    p.add_argument("--lora_alpha", type=int, default=16, help="LoRA alpha")
+    p.add_argument("--lora_dropout", type=float, default=0.0)
+    p.add_argument("--lora_targets", type=str, nargs="+", default=["qkv"],
+                   help="Leaf module names to adapt with LoRA")
+    p.add_argument("--use_proj_head", action="store_true", default=True,
+                   help="Use projection head (default: True)")
+    p.add_argument("--no_proj_head", action="store_true",
+                   help="Disable projection head (output backbone features directly)")
 
     # Pre-filtering by class membership
     p.add_argument("--class_metadata", default=None,
@@ -119,8 +139,14 @@ def parse_args() -> argparse.Namespace:
 
     args = p.parse_args()
 
-    if args.model != "dino" and args.checkpoint is None:
-        p.error("--checkpoint is required for --model vae/tilted")
+    if args.model not in ("dino",) and args.checkpoint is None:
+        p.error("--checkpoint is required for --model vae/tilted/dino_lora")
+
+    if args.no_proj_head:
+        args.use_proj_head = False
+
+    if args.model == "dino_lora" and args.img_size % 14 != 0:
+        args.img_size = 224
 
     return args
 
@@ -128,6 +154,18 @@ def parse_args() -> argparse.Namespace:
 def build_model(args: argparse.Namespace) -> torch.nn.Module:
     if args.model == "dino":
         return DinoV2Wrapper()
+    if args.model == "dino_lora":
+        return DinoV2LoRA(
+            backbone=args.dino_backbone,
+            img_size=args.img_size,
+            embedding_dim=args.embedding_dim,
+            proj_hidden_dim=args.proj_hidden_dim,
+            lora_rank=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+            lora_dropout=args.lora_dropout,
+            lora_targets=args.lora_targets,
+            use_proj_head=args.use_proj_head,
+        )
     if args.model == "tilted":
         return TiltedVAE(
             in_channels=args.in_channels,
@@ -203,7 +241,8 @@ def encode_paths(
         if not imgs:
             continue
         batch = torch.stack(imgs, dim=0).to(device)
-        mu, _ = model.encode(batch)
+        out = model.encode(batch)
+        mu = out if isinstance(out, torch.Tensor) else out[0]
         latents.append(mu.cpu())
     return torch.cat(latents, dim=0) if latents else torch.empty(0)
 
@@ -221,6 +260,11 @@ def main() -> None:
     model = build_model(args)
     if args.model == "dino":
         print("Model  : DINOv2 vits14  (pretrained, latent dim 384)")
+    elif args.model == "dino_lora":
+        load_checkpoint(model, args.checkpoint)
+        dim = args.embedding_dim if args.use_proj_head else "backbone"
+        print(f"Model  : DinoV2LoRA  (backbone={args.dino_backbone}, "
+              f"embedding_dim={dim}, img_size={args.img_size})")
     else:
         load_checkpoint(model, args.checkpoint)
         print(f"Model  : {args.model}  (latent dim {args.latent_dim})")
@@ -229,8 +273,8 @@ def main() -> None:
         param.requires_grad = False
 
     root_dir = Path(args.root_dir)
-    if args.model == "dino":
-        img_size = 224
+    if args.model in ("dino", "dino_lora"):
+        img_size = args.img_size if args.model == "dino_lora" else 224
         transform = _build_transform(img_size, imagenet_normalize=True)
         mode = ImageReadMode.RGB
     else:
