@@ -105,14 +105,23 @@ def parse_args() -> argparse.Namespace:
                              "raw model state_dict (.pt/.pth). "
                              "Not required for --model dino.")
     parser.add_argument("--model", type=str, default="vae",
-                        choices=["vae", "tilted", "dino"],
+                        choices=["vae", "tilted", "dino", "dino_lora"],
                         help="Model architecture matching the checkpoint. "
-                             "'dino' uses pretrained DINOv2 vits14.")
+                             "'dino' uses pretrained DINOv2 vits14. "
+                             "'dino_lora' uses DinoV2 with LoRA adapters.")
     parser.add_argument("--in_channels", type=int, default=3)
     parser.add_argument("--latent_dim", type=int, default=128)
     parser.add_argument("--img_size", type=int, default=96)
     parser.add_argument("--tau", type=float, default=None,
                         help="Tilt parameter for TiltedVAE (only used with --model tilted)")
+    parser.add_argument("--embedding_dim", type=int, default=256,
+                        help="Output embedding dimension for DinoV2LoRA")
+    parser.add_argument("--lora_rank", type=int, default=8,
+                        help="LoRA rank for DinoV2LoRA")
+    parser.add_argument("--lora_alpha", type=int, default=16,
+                        help="LoRA alpha for DinoV2LoRA")
+    parser.add_argument("--backbone", type=str, default="vit_small_patch14_dinov2",
+                        help="DINOv2 backbone variant for dino_lora")
 
     # Group selection (matched in size, color and shape)
     parser.add_argument("--pool", type=int, default=300,
@@ -299,14 +308,35 @@ def main() -> None:
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Model + weights (built/loaded once and shared by both tests).
-    model = size_test.build_model(args)
-    if args.model == "dino":
-        from permutation_test_size import DinoV2Wrapper
-        args.img_size = DinoV2Wrapper.IMG_SIZE
+    if args.model == "dino_lora":
+        from Models.DinoV2LoRA import DinoV2LoRA
+
+        class _DinoLoRAWrapper(DinoV2LoRA):
+            """Wraps encode() to return (embeddings, None) like VAE models."""
+            def encode(self, x):
+                return super().encode(x), None
+
+        model = _DinoLoRAWrapper(
+            backbone=args.backbone,
+            img_size=224,
+            embedding_dim=args.embedding_dim,
+            lora_rank=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+        )
+        args.img_size = 224
         args.in_channels = 3
-        print(f"Model  : DINOv2 vits14  (pretrained, img_size={args.img_size})")
-    else:
         size_test.load_checkpoint(model, args.checkpoint)
+        print(f"Model  : DinoV2LoRA ({args.backbone}, rank={args.lora_rank}, "
+              f"embed={args.embedding_dim}, img_size={args.img_size})")
+    else:
+        model = size_test.build_model(args)
+        if args.model == "dino":
+            from permutation_test_size import DinoV2Wrapper
+            args.img_size = DinoV2Wrapper.IMG_SIZE
+            args.in_channels = 3
+            print(f"Model  : DINOv2 vits14  (pretrained, img_size={args.img_size})")
+        else:
+            size_test.load_checkpoint(model, args.checkpoint)
     model.eval().to(device)
 
     # Select or reuse the shared, size-, color- and shape-matched image group.
