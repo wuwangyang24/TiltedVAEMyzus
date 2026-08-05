@@ -368,34 +368,61 @@ def main() -> None:
         print(f"Pre-filter: kept {len(metadata)}/{before} compounds")
 
     embeddings = {}
-    for entry in tqdm(metadata, desc="Encoding compounds"):
+    # ── Flatten all paths into a single list for one DataLoader pass ─────
+    all_paths: List[str] = []
+    # Each entry: (compound_id, plate_id, "treated"|"control", start_idx, count)
+    index_map: List[tuple] = []
+
+    for entry in metadata:
         compound_id = str(entry["Compound"])
-        plate_dict = {}
         for plate_id, plate_data in entry.items():
             if plate_id == "Compound":
                 continue
-            treated_paths = plate_data.get("treated", [])
-            control_paths = plate_data.get("control", [])
+            for role in ("treated", "control"):
+                paths = plate_data.get(role, [])
+                if paths:
+                    index_map.append((compound_id, str(plate_id), role,
+                                      len(all_paths), len(paths)))
+                    all_paths.extend(paths)
 
-            plate_entry = {}
-            if treated_paths:
-                plate_entry["treated"] = encode_paths(
-                    treated_paths, root_dir, model, transform, mode,
-                    args.batch_size, device, args.num_workers,
-                )
-            if control_paths:
-                control_latents = encode_paths(
-                    control_paths, root_dir, model, transform, mode,
-                    args.batch_size, device, args.num_workers,
-                )
-                if control_latents.numel() > 0:
-                    plate_entry["control"] = control_latents.mean(dim=0)
+    print(f"Total images to encode: {len(all_paths)}")
 
-            if plate_entry:
-                plate_dict[str(plate_id)] = plate_entry
+    dataset = _ImagePathDataset(all_paths, root_dir, transform, mode)
+    loader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        pin_memory=(device.type == "cuda"),
+        collate_fn=_collate_skip_none,
+    )
 
-        if plate_dict:
-            embeddings[compound_id] = plate_dict
+    # Encode everything in one pass
+    all_latents: List[torch.Tensor] = []
+    with torch.no_grad():
+        for batch in tqdm(loader, desc="Encoding"):
+            if batch is None:
+                all_latents.append(torch.empty(0))
+                continue
+            batch = batch.to(device, non_blocking=True)
+            out = model.encode(batch)
+            mu = out if isinstance(out, torch.Tensor) else out[0]
+            all_latents.append(mu.cpu())
+
+    all_encoded = torch.cat(all_latents, dim=0) if all_latents else torch.empty(0)
+
+    # Scatter results back into compound/plate/role structure
+    for compound_id, plate_id, role, start, count in index_map:
+        chunk = all_encoded[start:start + count]
+        if chunk.numel() == 0:
+            continue
+        if compound_id not in embeddings:
+            embeddings[compound_id] = {}
+        if plate_id not in embeddings[compound_id]:
+            embeddings[compound_id][plate_id] = {}
+        if role == "control":
+            embeddings[compound_id][plate_id]["control"] = chunk.mean(dim=0)
+        else:
+            embeddings[compound_id][plate_id]["treated"] = chunk
 
     # ── Save ─────────────────────────────────────────────────────────────────
     out_path = Path(args.output)
