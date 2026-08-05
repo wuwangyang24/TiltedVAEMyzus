@@ -122,6 +122,8 @@ def parse_args() -> argparse.Namespace:
                         help="LoRA alpha for DinoV2LoRA")
     parser.add_argument("--backbone", type=str, default="vit_small_patch14_dinov2",
                         help="DINOv2 backbone variant for dino_lora")
+    parser.add_argument("--no_proj", action="store_true",
+                        help="Disable projection head for DinoV2LoRA")
 
     # Group selection (matched in size, color and shape)
     parser.add_argument("--pool", type=int, default=300,
@@ -322,6 +324,7 @@ def main() -> None:
             embedding_dim=args.embedding_dim,
             lora_rank=args.lora_rank,
             lora_alpha=args.lora_alpha,
+            use_proj_head=not args.no_proj,
         )
         args.img_size = 224
         args.in_channels = 3

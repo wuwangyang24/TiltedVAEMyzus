@@ -371,9 +371,6 @@ def main() -> None:
 
     # Optional: chemical-class classifier callback (works for both the VAE
     # encoders and the DINOv2+LoRA embedding model).
-    # Always instantiate when args are provided (needed for post-training eval);
-    # only add to trainer callbacks when periodic evaluation is enabled.
-    cls_callback = None
     if (args.cls_image_metadata and args.cls_label_metadata
             and args.cls_root_dir):
         cls_callback = ChemicalClassClassifierCallback(
@@ -400,8 +397,6 @@ def main() -> None:
         if not args.disable_cls_callback:
             callbacks.append(cls_callback)
             print(f"[ClassifierCallback] Enabled — evaluating every {args.cls_every_n_epochs} epochs")
-        else:
-            print("[ClassifierCallback] Periodic evaluation disabled; will run post-training only")
 
     # Trainer
     # Parse --devices: "auto" stays as-is; comma-separated digits become a
@@ -424,21 +419,6 @@ def main() -> None:
     )
 
     trainer.fit(experiment, datamodule=datamodule)
-
-    # ── Post-training: evaluate best checkpoints ─────────────────────────────
-    if cls_callback is not None:
-        best_ckpts = [("best_val_loss", checkpoint_callback.best_model_path)]
-        if is_dino:
-            best_ckpts.append(("best_val_knn_acc", knn_checkpoint_callback.best_model_path))
-
-        for tag, ckpt_path in best_ckpts:
-            if not ckpt_path or not os.path.exists(ckpt_path):
-                print(f"  [PostTraining] No checkpoint found for {tag}, skipping.", flush=True)
-                continue
-            print(f"\n  [PostTraining] Loading {tag} checkpoint: {ckpt_path}", flush=True)
-            ckpt = torch.load(ckpt_path, weights_only=False)
-            experiment.load_state_dict(ckpt["state_dict"])
-            cls_callback.run_final_evaluation(trainer, experiment, tag)
 
 
 if __name__ == "__main__":
