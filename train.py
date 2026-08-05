@@ -335,7 +335,7 @@ def main() -> None:
         level_tag = "_Comp" if args.compound_level else ""
         ckpt_suffix = (
             f"DINO_LoRA_{targets_tag}"
-            f"_R{args.lora_rank}_A{args.lora_alpha}"
+            f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
             f"_P{p_val}_K{k_val}"
             f"_{proj_tag}"
             f"_T{args.temperature}"
