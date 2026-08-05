@@ -310,6 +310,8 @@ def main() -> None:
     model.to(device).eval()
     for param in model.parameters():
         param.requires_grad = False
+    if device.type == "cuda":
+        model = torch.compile(model)
 
     root_dir = Path(args.root_dir)
     if args.model in ("dino", "dino_lora"):
