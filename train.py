@@ -361,7 +361,7 @@ def main() -> None:
         monitor="val_loss",
         mode="min",
         save_top_k=1,
-        save_last=False,
+        save_last=True,
     )
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
 
