@@ -38,7 +38,7 @@ Output .pt file structure (dict):
     }
 
 Usage:
-python TiltedVAEMyzus/Tests/chemical_class_classifier/encode_embeddings.py --metadata METADATA/metadata_compound_all100ppm.json --root_dir DATA_TEST/ --output TiltedVAEMyzus/Tests/chemical_class_classifier/embeddings.pt --checkpoint 'results/checkpoints/DINO_LoRA_qkv_proj_R32_A64_P80_K8_NoProj_T0.1_Comp/dino_lora-best-knn-epoch=06-val_batch_knn_acc=0.4330.ckpt' --model tilted --latent_dim 128 --img_size 224 --device cuda --compound_col compound --label_col synthesis_program --min_compounds_per_class 30 --class_metadata METADATA/synthesisprogram_compoundno.csv
+python TiltedVAEMyzus/Tests/chemical_class_classifier/encode_embeddings.py --metadata METADATA/metadata_compound_all100ppm.json --root_dir DATA_TEST/ --output TiltedVAEMyzus/Tests/chemical_class_classifier/embeddings.pt --checkpoint 'results/checkpoints/DINO_LoRA_qkv_proj_R32_A64_P80_K8_NoProj_T0.1_Comp/dino_lora-best-knn-epoch=06-val_batch_knn_acc=0.4330.ckpt' --lora_rank 32 --lora_alpha 64 --lora_targets qkv proj --no_proj_head --img_size 224 --device cuda --compound_col compound --label_col synthesis_program --min_compounds_per_class 30 --filter_by_efficacy 0 --class_metadata METADATA/synthesisprogram_compoundno.csv
 """
 
 import argparse
