@@ -52,6 +52,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torchvision.transforms as T
+from torch.utils.data import DataLoader, Dataset
 from torchvision.io import ImageReadMode, read_image
 from tqdm import tqdm
 
@@ -137,6 +138,8 @@ def parse_args() -> argparse.Namespace:
                         "an 'Efficacy' column in --class_metadata). Default: 0")
 
     p.add_argument("--batch_size", type=int, default=64)
+    p.add_argument("--num_workers", type=int, default=4,
+                   help="DataLoader workers for parallel image loading. Default: 4")
     p.add_argument("--device", default=None,
                    help="Torch device (default: cuda if available else cpu)")
 
@@ -220,6 +223,34 @@ def _build_transform(img_size: int, imagenet_normalize: bool = False) -> T.Compo
     return T.Compose(transforms)
 
 
+class _ImagePathDataset(Dataset):
+    """Dataset that loads and transforms images from a list of relative paths."""
+
+    def __init__(self, rel_paths: List[str], root_dir: Path,
+                 transform: T.Compose, mode: ImageReadMode):
+        self.paths = [root_dir / p for p in rel_paths]
+        self.transform = transform
+        self.mode = mode
+
+    def __len__(self) -> int:
+        return len(self.paths)
+
+    def __getitem__(self, idx: int) -> Optional[torch.Tensor]:
+        path = self.paths[idx]
+        if not path.exists():
+            return None
+        img = read_image(str(path), mode=self.mode)
+        return self.transform(img)
+
+
+def _collate_skip_none(batch):
+    """Collate that filters out None entries (missing files)."""
+    batch = [x for x in batch if x is not None]
+    if not batch:
+        return None
+    return torch.stack(batch, dim=0)
+
+
 @torch.no_grad()
 def encode_paths(
     rel_paths: List[str],
@@ -229,21 +260,26 @@ def encode_paths(
     mode: ImageReadMode,
     batch_size: int,
     device: torch.device,
+    num_workers: int = 4,
 ) -> torch.Tensor:
     """Encode a list of image paths to a (N, D) float32 CPU tensor of latent means."""
+    if not rel_paths:
+        return torch.empty(0)
+
+    dataset = _ImagePathDataset(rel_paths, root_dir, transform, mode)
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=(device.type == "cuda"),
+        collate_fn=_collate_skip_none,
+    )
+
     latents: List[torch.Tensor] = []
-    for start in range(0, len(rel_paths), batch_size):
-        batch_paths = rel_paths[start:start + batch_size]
-        imgs = []
-        for rel in batch_paths:
-            full_path = root_dir / rel
-            if not full_path.exists():
-                continue
-            img = read_image(str(full_path), mode=mode)
-            imgs.append(transform(img))
-        if not imgs:
+    for batch in loader:
+        if batch is None:
             continue
-        batch = torch.stack(imgs, dim=0).to(device)
+        batch = batch.to(device, non_blocking=True)
         out = model.encode(batch)
         mu = out if isinstance(out, torch.Tensor) else out[0]
         latents.append(mu.cpu())
@@ -343,12 +379,12 @@ def main() -> None:
             if treated_paths:
                 plate_entry["treated"] = encode_paths(
                     treated_paths, root_dir, model, transform, mode,
-                    args.batch_size, device,
+                    args.batch_size, device, args.num_workers,
                 )
             if control_paths:
                 control_latents = encode_paths(
                     control_paths, root_dir, model, transform, mode,
-                    args.batch_size, device,
+                    args.batch_size, device, args.num_workers,
                 )
                 if control_latents.numel() > 0:
                     plate_entry["control"] = control_latents.mean(dim=0)
