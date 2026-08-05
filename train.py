@@ -125,6 +125,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--au_threshold", type=float, default=0.01,
                         help="Posterior-mean variance threshold for counting active units (AU)")
     parser.add_argument("--scheduler_gamma", type=float, default=0.95)
+    parser.add_argument("--scheduler", type=str, default="exponential",
+                        choices=["exponential", "cosine"],
+                        help="LR scheduler: 'exponential' (decay by gamma each epoch) "
+                             "or 'cosine' (anneal to ~0 over all epochs). Default: exponential")
+    parser.add_argument("--warmup_epochs", type=int, default=0,
+                        help="Linear warmup epochs before the main schedule. Default: 0")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--weak_sigreg_weight", type=float, default=0.0,
                         help="Weight for Weak-SIGReg covariance regularization (0 disables it)")
@@ -271,6 +277,9 @@ def main() -> None:
             weight_decay=args.weight_decay,
             temperature=args.temperature,
             scheduler_gamma=args.scheduler_gamma,
+            scheduler=args.scheduler,
+            warmup_epochs=args.warmup_epochs,
+            max_epochs=args.epochs,
         )
     else:
         if not args.data_dir:

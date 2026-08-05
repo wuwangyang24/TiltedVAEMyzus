@@ -26,13 +26,19 @@ class ContrastiveExperiment(pl.LightningModule):
                  lr: float = 1e-4,
                  weight_decay: float = 1e-4,
                  temperature: float = 0.1,
-                 scheduler_gamma: float = 0.95) -> None:
+                 scheduler_gamma: float = 0.95,
+                 scheduler: str = "exponential",
+                 warmup_epochs: int = 0,
+                 max_epochs: int = 100) -> None:
         super().__init__()
         self.model = model
         self.lr = lr
         self.weight_decay = weight_decay
         self.temperature = temperature
         self.scheduler_gamma = scheduler_gamma
+        self.scheduler_type = scheduler
+        self.warmup_epochs = warmup_epochs
+        self.max_epochs = max_epochs
         self.save_hyperparameters(ignore=["model"])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -61,16 +67,32 @@ class ContrastiveExperiment(pl.LightningModule):
         return loss_dict["loss"]
 
     def configure_optimizers(self):
-        # Optimize only the trainable (LoRA + projection head) parameters.
         optimizer = torch.optim.AdamW(
             self.model.trainable_parameters(),
             lr=self.lr,
             weight_decay=self.weight_decay,
         )
-        if self.scheduler_gamma is None:
+        if self.scheduler_gamma is None and self.scheduler_type == "exponential":
             return optimizer
 
-        scheduler = torch.optim.lr_scheduler.ExponentialLR(
-            optimizer, gamma=self.scheduler_gamma
-        )
+        if self.scheduler_type == "cosine":
+            main_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=self.max_epochs - self.warmup_epochs, eta_min=1e-7
+            )
+        else:
+            main_scheduler = torch.optim.lr_scheduler.ExponentialLR(
+                optimizer, gamma=self.scheduler_gamma
+            )
+
+        if self.warmup_epochs > 0:
+            warmup = torch.optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=0.01, total_iters=self.warmup_epochs
+            )
+            scheduler = torch.optim.lr_scheduler.SequentialLR(
+                optimizer, schedulers=[warmup, main_scheduler],
+                milestones=[self.warmup_epochs]
+            )
+        else:
+            scheduler = main_scheduler
+
         return [optimizer], [scheduler]
