@@ -41,6 +41,7 @@ def build_mean_latent_features(
     control_key: str = "control_mean",
     normalize_before_subtract: bool = False,
     normalize_after_subtract: bool = False,
+    normalize_MAD: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
     """
     Build a (num_compounds, D) feature matrix where each row is the mean
@@ -88,7 +89,16 @@ def build_mean_latent_features(
         y_rows.append(comp2label[cid])
         cids.append(cid)
 
-    return np.stack(X_rows), np.array(y_rows), cids
+    X = np.stack(X_rows)
+    y_arr = np.array(y_rows)
+
+    if normalize_MAD:
+        median = np.median(X, axis=0)
+        mad = np.median(np.abs(X - median), axis=0)
+        mad[mad == 0] = 1.0
+        X = (X - median) / mad
+
+    return X, y_arr, cids
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
