@@ -111,7 +111,10 @@ def parse_args() -> argparse.Namespace:
                    help="Keep only compounds whose 'Efficacy' column in metadata is >= this value. "
                         "Requires an 'Efficacy' column in the metadata file.")
     p.add_argument("--subtract_control", action="store_true",
-                   help="Subtract per-plate averaged control embedding from treated embeddings")
+                   help="Subtract per-plate control embedding from treated embeddings")
+    p.add_argument("--control_type", choices=["mean", "median"], default="mean",
+                   help="Which control aggregation to subtract: 'mean' uses control_mean, "
+                        "'median' uses control_median. Default: mean")
     p.add_argument("--normalize_before_subtract", action="store_true",
                    help="L2-normalize treated and control embeddings before subtraction "
                         "(requires --subtract_control)")
@@ -276,6 +279,7 @@ def _run_catboost(
         label_col=df[args.label_col],
         label2idx=str2idx,
         subtract_control=args.subtract_control,
+        control_key=f"control_{args.control_type}",
         normalize_before_subtract=args.normalize_before_subtract,
         normalize_after_subtract=args.normalize_after_subtract,
     )
@@ -425,6 +429,7 @@ def _run_catboost(
             f"Classifier       : catboost\n"
             f"Embeddings       : {args.embeddings}\n"
             f"Subtract control : {args.subtract_control}\n"
+            f"Control type     : {args.control_type}\n"
             f"Normalize before subtract : {args.normalize_before_subtract}\n"
             f"Normalize after subtract  : {args.normalize_after_subtract}\n"
             f"Auto class weights : {auto_cw}\n\n"
@@ -464,7 +469,7 @@ def main() -> None:
     # ── Output directory ─────────────────────────────────────────────────────
     date_str = datetime.now().strftime("%Y-%m-%d")
     model_name = args.model_name if args.model_name else Path(args.embeddings).stem
-    subtract_dir = "subtract_control" if args.subtract_control else "no_subtract_control"
+    subtract_dir = f"subtract_{args.control_type}" if args.subtract_control else "no_subtract_control"
     min_cpc_dir = f"minCPC{args.min_compounds_per_class}"
     output_dir = Path(args.output_dir) / date_str / model_name / "catboost" / subtract_dir / min_cpc_dir
     output_dir.mkdir(parents=True, exist_ok=True)

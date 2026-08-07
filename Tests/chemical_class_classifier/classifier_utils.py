@@ -38,6 +38,7 @@ def build_mean_latent_features(
     label_col: pd.Series,
     label2idx: Dict[str, int],
     subtract_control: bool = False,
+    control_key: str = "control_mean",
     normalize_before_subtract: bool = False,
     normalize_after_subtract: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, List[str]]:
@@ -67,14 +68,15 @@ def build_mean_latent_features(
             treated = plate_data.get("treated")
             if treated is None or treated.numel() == 0:
                 continue
-            if subtract_control and "control" in plate_data:
-                control = plate_data["control"]
-                if normalize_before_subtract:
-                    treated = _l2_normalize(treated)
-                    control = _l2_normalize(control)
-                treated = treated - control.unsqueeze(0)
-                if normalize_after_subtract:
-                    treated = _l2_normalize(treated)
+            if subtract_control:
+                control = plate_data.get(control_key) or plate_data.get("control")
+                if control is not None:
+                    if normalize_before_subtract:
+                        treated = _l2_normalize(treated)
+                        control = _l2_normalize(control)
+                    treated = treated - control.unsqueeze(0)
+                    if normalize_after_subtract:
+                        treated = _l2_normalize(treated)
             plate_latents.append(treated.float())
 
         if not plate_latents:

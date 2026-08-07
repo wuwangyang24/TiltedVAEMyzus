@@ -420,7 +420,8 @@ def main() -> None:
         if plate_id not in embeddings[compound_id]:
             embeddings[compound_id][plate_id] = {}
         if role == "control":
-            embeddings[compound_id][plate_id]["control"] = chunk.mean(dim=0)
+            embeddings[compound_id][plate_id]["control_mean"] = chunk.mean(dim=0)
+            embeddings[compound_id][plate_id]["control_median"] = chunk.median(dim=0).values
         else:
             embeddings[compound_id][plate_id]["treated"] = chunk
 

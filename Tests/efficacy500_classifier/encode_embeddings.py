@@ -47,11 +47,12 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 import numpy as np
 import torch
 import torchvision.transforms as T
+from torch.utils.data import Dataset, DataLoader
 from torchvision.io import ImageReadMode, read_image
 from tqdm import tqdm
 
@@ -75,6 +76,37 @@ class DinoV2Wrapper(torch.nn.Module):
     def encode(self, x: torch.Tensor):
         features = self.backbone(x)          # (B, D)  D=384 for vits14
         return features, None                # no log_var
+
+
+class ImagePathDataset(Dataset):
+    """Dataset that loads images by path and returns (global_index, image_tensor).
+    Invalid/missing images are skipped via a collate function."""
+
+    def __init__(self, paths: List[str], root_dir: Path, transform: T.Compose,
+                 mode: ImageReadMode):
+        self.paths = paths
+        self.root_dir = root_dir
+        self.transform = transform
+        self.mode = mode
+
+    def __len__(self):
+        return len(self.paths)
+
+    def __getitem__(self, idx: int):
+        full_path = self.root_dir / self.paths[idx]
+        if not full_path.exists():
+            return None
+        img = read_image(str(full_path), mode=self.mode)
+        return idx, self.transform(img)
+
+
+def _collate_skip_none(batch):
+    """Collate that filters out None entries (missing files)."""
+    batch = [item for item in batch if item is not None]
+    if not batch:
+        return None
+    indices, imgs = zip(*batch)
+    return list(indices), torch.stack(imgs)
 
 
 def parse_args() -> argparse.Namespace:
@@ -122,6 +154,8 @@ def parse_args() -> argparse.Namespace:
                    help="Disable projection head (output backbone features directly)")
 
     p.add_argument("--batch_size", type=int, default=64)
+    p.add_argument("--num_workers", type=int, default=4,
+                   help="Number of DataLoader workers for parallel image loading")
     p.add_argument("--fp16", action="store_true",
                    help="Use mixed-precision (fp16) inference for faster encoding on GPU")
     p.add_argument("--device", default=None,
@@ -209,39 +243,6 @@ def _build_transform(img_size: int, imagenet_normalize: bool = False) -> T.Compo
     return T.Compose(transforms)
 
 
-@torch.no_grad()
-def encode_paths(
-    rel_paths: List[str],
-    root_dir: Path,
-    model: torch.nn.Module,
-    transform: T.Compose,
-    mode: ImageReadMode,
-    batch_size: int,
-    device: torch.device,
-    use_fp16: bool = False,
-) -> torch.Tensor:
-    """Encode a list of image paths to a (N, D) float32 CPU tensor of latent means."""
-    latents: List[torch.Tensor] = []
-    for start in range(0, len(rel_paths), batch_size):
-        batch_paths = rel_paths[start:start + batch_size]
-        imgs = []
-        for rel in batch_paths:
-            full_path = root_dir / rel
-            if not full_path.exists():
-                continue
-            img = read_image(str(full_path), mode=mode)
-            imgs.append(transform(img))
-        if not imgs:
-            continue
-        batch = torch.stack(imgs, dim=0).to(device)
-        with torch.autocast(device_type=device.type, enabled=use_fp16):
-            out = model.encode(batch)
-        # DinoV2LoRA.encode() returns a single tensor; VAE/TiltedVAE return (mu, log_var)
-        mu = out if isinstance(out, torch.Tensor) else out[0]
-        latents.append(mu.float().cpu())
-    return torch.cat(latents, dim=0) if latents else torch.empty(0)
-
-
 def main() -> None:
     args = parse_args()
 
@@ -309,32 +310,30 @@ def main() -> None:
 
     print(f"Total images to encode: {len(all_paths)}")
 
-    # ── Encode all images in large batches ───────────────────────────────────
+    # ── Encode all images in large batches via DataLoader ───────────────────
+    dataset = ImagePathDataset(all_paths, root_dir, transform, mode)
+    loader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        collate_fn=_collate_skip_none,
+        pin_memory=(device.type == "cuda"),
+        shuffle=False,
+    )
+
     all_embeddings = torch.zeros(len(all_paths), 1)  # placeholder
     encoded_mask = np.zeros(len(all_paths), dtype=bool)
+    latent_chunks: List[Tuple[List[int], torch.Tensor]] = []
 
-    latent_chunks: List[Tuple[int, torch.Tensor]] = []
-    for start in tqdm(range(0, len(all_paths), args.batch_size),
-                      desc="Encoding images",
-                      total=(len(all_paths) + args.batch_size - 1) // args.batch_size):
-        batch_paths = all_paths[start:start + args.batch_size]
-        imgs = []
-        valid_indices = []
-        for i, rel in enumerate(batch_paths):
-            full_path = root_dir / rel
-            if not full_path.exists():
-                continue
-            img = read_image(str(full_path), mode=mode)
-            imgs.append(transform(img))
-            valid_indices.append(start + i)
-        if not imgs:
+    for batch_data in tqdm(loader, desc="Encoding images"):
+        if batch_data is None:
             continue
-        batch = torch.stack(imgs, dim=0).to(device)
-        with torch.autocast(device_type=device.type, enabled=args.fp16):
-            out = model.encode(batch)
+        valid_indices, imgs = batch_data
+        imgs = imgs.to(device, non_blocking=True)
+        with torch.no_grad(), torch.autocast(device_type=device.type, enabled=args.fp16):
+            out = model.encode(imgs)
         mu = out if isinstance(out, torch.Tensor) else out[0]
-        mu = mu.float().cpu()
-        latent_chunks.append((valid_indices, mu))
+        latent_chunks.append((valid_indices, mu.float().cpu()))
 
     # Assemble into a single tensor
     if latent_chunks:
@@ -359,7 +358,8 @@ def main() -> None:
         if role == "treated":
             embeddings[compound_id][plate_id]["treated"] = emb
         else:
-            embeddings[compound_id][plate_id]["control"] = emb.mean(dim=0)
+            embeddings[compound_id][plate_id]["control_mean"] = emb.mean(dim=0)
+            embeddings[compound_id][plate_id]["control_median"] = emb.median(dim=0).values
 
     # ── Save ─────────────────────────────────────────────────────────────────
     out_path = Path(args.output)
