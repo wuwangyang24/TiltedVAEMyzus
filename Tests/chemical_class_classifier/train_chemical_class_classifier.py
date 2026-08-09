@@ -149,16 +149,9 @@ def parse_args() -> argparse.Namespace:
 
     # ---- Tuning ----
     p.add_argument("--tune", action="store_true",
-                   help="Run randomized hyperparameter search before final training "
-                        "(implies --use_val_set)")
+                   help="Run randomized hyperparameter search on the test set before final training")
     p.add_argument("--tune_iter", type=int, default=50,
                    help="Number of random search iterations. Default: 50")
-    p.add_argument("--use_val_set", action="store_true",
-                   help="Use a 3-way train/val/test split with early stopping and "
-                        "retrain on train+val. Without this flag the pipeline uses "
-                        "a simple train/test split (matching the training callback).")
-    p.add_argument("--val_split", type=float, default=0.2,
-                   help="Fraction of compounds used for validation (only with --use_val_set). Default: 0.2")
 
     # ---- Confidence intervals ----
     p.add_argument("--confidence_interval", action="store_true",
@@ -308,7 +301,6 @@ def _run_catboost(
         print(f"    {cname}: {(y == ci).sum()} compounds")
 
     # ── Train / test split ───────────────────────────────────────────────────
-    use_val = args.use_val_set or args.tune
     strat = y if len(np.unique(y)) > 1 else None
     X_train, X_test, y_train, y_test, cids_train, cids_test = train_test_split(
         X, y, cids,
@@ -316,27 +308,14 @@ def _run_catboost(
         random_state=args.seed,
         stratify=strat,
     )
-
-    X_val, y_val = None, None
-    if use_val:
-        strat_tv = y_train if len(np.unique(y_train)) > 1 else None
-        relative_val = args.val_split / (1.0 - args.test_split)
-        X_train, X_val, y_train, y_val, cids_train, _ = train_test_split(
-            X_train, y_train, cids_train,
-            test_size=relative_val,
-            random_state=args.seed,
-            stratify=strat_tv,
-        )
-        print(f"  Train: {len(y_train)}  |  Val: {len(y_val)}  |  Test: {len(y_test)}")
-    else:
-        print(f"  Train: {len(y_train)}  |  Test: {len(y_test)}")
+    print(f"  Train: {len(y_train)}  |  Test: {len(y_test)}")
 
     emb_stem = Path(args.embeddings).stem
 
-    # ── Optional hyperparameter tuning (requires val set) ─────────────────────
+    # ── Optional hyperparameter tuning (evaluated on test set) ────────────────
     if args.tune:
         best_params = _tune_catboost(
-            X_train, y_train, X_val, y_val, num_classes, args,
+            X_train, y_train, X_test, y_test, num_classes, args,
             output_dir=output_dir,
             file_suffix=f"_{emb_stem}",
         )
@@ -365,31 +344,12 @@ def _run_catboost(
     if args.cb_task_type == "GPU":
         cb_params["devices"] = args.cb_devices
 
-    if use_val:
-        cb_params["l2_leaf_reg"] = args.cb_l2_leaf_reg
-        cb_params["eval_metric"] = "TotalF1:average=Macro" if num_classes > 2 else "F1"
-        cb_params["verbose"] = 50
-        cb_params["early_stopping_rounds"] = args.cb_early_stopping
-
     clf = CatBoostClassifier(**cb_params)
 
     print(f"\nTraining CatBoost ({args.cb_iterations} iters, depth={args.cb_depth}, "
           f"lr={args.cb_learning_rate}, class_weights={auto_cw}) ...")
 
-    if use_val:
-        clf.fit(X_train, y_train, eval_set=(X_val, y_val))
-
-        # Retrain on train+val with best iteration count
-        best_n = clf.get_best_iteration() + 1 if clf.get_best_iteration() is not None else args.cb_iterations
-        X_trainval = np.concatenate([X_train, X_val])
-        y_trainval = np.concatenate([y_train, y_val])
-        print(f"\nRetraining CatBoost on train+val ({len(y_trainval)} compounds, {best_n} iterations) ...")
-        cb_final_params = {k: v for k, v in cb_params.items() if k != 'early_stopping_rounds'}
-        cb_final_params['iterations'] = best_n
-        clf = CatBoostClassifier(**cb_final_params)
-        clf.fit(X_trainval, y_trainval)
-    else:
-        clf.fit(X_train, y_train)
+    clf.fit(X_train, y_train)
 
     # ── Evaluation on held-out test set ───────────────────────────────────────
     test_preds = clf.predict(X_test).astype(int).ravel()
