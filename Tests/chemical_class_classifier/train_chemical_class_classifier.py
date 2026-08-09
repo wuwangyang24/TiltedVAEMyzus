@@ -143,6 +143,10 @@ def parse_args() -> argparse.Namespace:
                    help="[CatBoost] Auto class weighting. Default: Balanced")
     p.add_argument("--cb_early_stopping", type=int, default=50,
                    help="[CatBoost] Early stopping rounds (only used with --use_val_set). Default: 50")
+    p.add_argument("--cb_task_type", choices=["CPU", "GPU"], default="CPU",
+                   help="[CatBoost] Training device. Default: CPU")
+    p.add_argument("--cb_devices", type=str, default="0",
+                   help="[CatBoost] GPU device id(s), e.g. '0' or '0:1' (only used with --cb_task_type GPU). Default: 0")
 
     # ---- Tuning ----
     p.add_argument("--tune", action="store_true",
@@ -349,6 +353,8 @@ def _run_catboost(
     if args.tune:
         best_params = _tune_catboost(
             X_train, y_train, X_val, y_val, num_classes, args,
+            output_dir=output_dir,
+            file_suffix=f"_{emb_stem}",
         )
         args.cb_iterations = best_params["iterations"]
         args.cb_depth = best_params["depth"]
@@ -370,7 +376,10 @@ def _run_catboost(
         loss_function="MultiClass" if num_classes > 2 else "Logloss",
         random_seed=args.seed,
         verbose=0,
+        task_type=args.cb_task_type,
     )
+    if args.cb_task_type == "GPU":
+        cb_params["devices"] = args.cb_devices
 
     if use_val:
         cb_params["l2_leaf_reg"] = args.cb_l2_leaf_reg

@@ -5,7 +5,9 @@ Randomized hyperparameter search for the CatBoost chemical-class classifier
 """
 
 import argparse
-from typing import Dict
+import json
+from pathlib import Path
+from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
@@ -25,6 +27,8 @@ def _tune_catboost(
     y_val: np.ndarray,
     num_classes: int,
     args: argparse.Namespace,
+    output_dir: Optional[Path] = None,
+    file_suffix: str = "",
 ) -> Dict:
     """Random search over CatBoost hyperparameters, return best config."""
     param_space = {
@@ -63,7 +67,10 @@ def _tune_catboost(
             random_seed=args.seed,
             verbose=0,
             early_stopping_rounds=args.cb_early_stopping,
+            task_type=getattr(args, "cb_task_type", "CPU"),
         )
+        if getattr(args, "cb_task_type", "CPU") == "GPU":
+            cb_params["devices"] = getattr(args, "cb_devices", "0")
 
         clf = CatBoostClassifier(**cb_params)
         clf.fit(
@@ -93,10 +100,23 @@ def _tune_catboost(
     print(f"\n  Top 5 configs:")
     print(results_df.head().to_string(index=False))
 
-    return {
+    best_config = {
         "iterations": int(best_params["iterations"]),
         "depth": int(best_params["depth"]),
         "learning_rate": float(best_params["learning_rate"]),
         "l2_leaf_reg": float(best_params["l2_leaf_reg"]),
         "auto_class_weights": str(best_params["auto_class_weights"]),
     }
+
+    if output_dir is not None:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        results_path = output_dir / f"tuning_results{file_suffix}.csv"
+        results_df.to_csv(results_path, index=False)
+        best_path = output_dir / f"best_params{file_suffix}.json"
+        with open(best_path, "w", encoding="utf-8") as f:
+            json.dump({**best_config, "balanced_acc": float(best_acc)}, f, indent=2)
+        print(f"  Tuning results saved to : {results_path}")
+        print(f"  Best params saved to    : {best_path}")
+
+    return best_config
