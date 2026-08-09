@@ -352,7 +352,9 @@ class DinoV2LoRA(nn.Module):
 
         diff2 = (emp_re - tgt_re) ** 2 + emp_im ** 2      # (num_slices, F)
         dt = t[1] - t[0]
-        stat = (diff2 * weight).sum(dim=1) * dt           # (num_slices,)
+        # Epps-Pulley statistic includes the sample-size factor N (= M here),
+        # which sets its magnitude relative to the prediction term.
+        stat = m * (diff2 * weight).sum(dim=1) * dt       # (num_slices,)
         return stat.mean()
 
     @staticmethod
