@@ -9,7 +9,7 @@ from pytorch_lightning.loggers import WandbLogger
 from Models import VAE, TiltedVAE, DinoV2LoRA
 from dataset import VAEDataModule, ContrastiveDataModule
 from experiment import VAEExperiment
-from contrastive_experiment import ContrastiveExperiment
+from contrastive_experiment import ContrastiveExperiment, LeJEPAExperiment
 from Tests.chemical_class_classifier.classifier_callback import ChemicalClassClassifierCallback
 
 # Use file-system based tensor sharing to avoid /dev/shm exhaustion, which
@@ -110,6 +110,26 @@ def parse_args() -> argparse.Namespace:
                              "instead of the synthesis-program level: each compound "
                              "becomes its own class, so positives are images of the "
                              "same compound (across plates/replicates).")
+
+    # LeJEPA self-supervised training (only used when --model dino_lora)
+    parser.add_argument("--ssl_lejepa", action="store_true",
+                        help="Train the DINOv2+LoRA model with the label-free LeJEPA "
+                             "self-supervised objective (multi-view prediction + SIGReg) "
+                             "instead of supervised contrastive learning.")
+    parser.add_argument("--ssl_views", type=int, default=2,
+                        help="Number of augmented views per image for LeJEPA. Default: 2")
+    parser.add_argument("--ssl_rotation", type=float, default=30.0,
+                        help="Max random rotation (degrees) for LeJEPA augmentations.")
+    parser.add_argument("--ssl_translate", type=float, default=0.1,
+                        help="Max random translation (fraction of image size) for "
+                             "LeJEPA augmentations.")
+    parser.add_argument("--sigreg_weight", type=float, default=1.0,
+                        help="Weight of the SIGReg term relative to the LeJEPA "
+                             "prediction/invariance term.")
+    parser.add_argument("--sigreg_slices", type=int, default=512,
+                        help="Number of random 1-D projections for SIGReg. Default: 512")
+    parser.add_argument("--sigreg_num_freqs", type=int, default=33,
+                        help="Quadrature points for the SIGReg Epps-Pulley integral.")
 
     # Optimization
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -255,6 +275,10 @@ def main() -> None:
             classes_per_batch=args.contrastive_classes_per_batch,
             samples_per_class=args.contrastive_samples_per_class,
             compound_level=args.compound_level,
+            ssl_mode=args.ssl_lejepa,
+            ssl_views=args.ssl_views,
+            ssl_rotation=args.ssl_rotation,
+            ssl_translate=args.ssl_translate,
             seed=args.seed,
         )
 
@@ -271,16 +295,30 @@ def main() -> None:
             use_proj_head=args.use_proj_head,
         )
 
-        experiment = ContrastiveExperiment(
-            model=model,
-            lr=args.lr,
-            weight_decay=args.weight_decay,
-            temperature=args.temperature,
-            scheduler_gamma=args.scheduler_gamma,
-            scheduler=args.scheduler,
-            warmup_epochs=args.warmup_epochs,
-            max_epochs=args.epochs,
-        )
+        if args.ssl_lejepa:
+            experiment = LeJEPAExperiment(
+                model=model,
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+                sigreg_weight=args.sigreg_weight,
+                sigreg_slices=args.sigreg_slices,
+                sigreg_num_freqs=args.sigreg_num_freqs,
+                scheduler_gamma=args.scheduler_gamma,
+                scheduler=args.scheduler,
+                warmup_epochs=args.warmup_epochs,
+                max_epochs=args.epochs,
+            )
+        else:
+            experiment = ContrastiveExperiment(
+                model=model,
+                lr=args.lr,
+                weight_decay=args.weight_decay,
+                temperature=args.temperature,
+                scheduler_gamma=args.scheduler_gamma,
+                scheduler=args.scheduler,
+                warmup_epochs=args.warmup_epochs,
+                max_epochs=args.epochs,
+            )
     else:
         if not args.data_dir:
             raise ValueError(f"--data_dir is required for --model {args.model}.")
@@ -342,14 +380,22 @@ def main() -> None:
         p_val = args.contrastive_classes_per_batch
         k_val = args.contrastive_samples_per_class
         level_tag = "_Comp" if args.compound_level else ""
-        ckpt_suffix = (
-            f"DINO_LoRA_{targets_tag}"
-            f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
-            f"_P{p_val}_K{k_val}"
-            f"_{proj_tag}"
-            f"_T{args.temperature}"
-            f"{level_tag}"
-        )
+        if args.ssl_lejepa:
+            ckpt_suffix = (
+                f"DINO_LoRA_{targets_tag}"
+                f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
+                f"_{proj_tag}"
+                f"_LeJEPA_V{args.ssl_views}_SW{args.sigreg_weight}"
+            )
+        else:
+            ckpt_suffix = (
+                f"DINO_LoRA_{targets_tag}"
+                f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
+                f"_P{p_val}_K{k_val}"
+                f"_{proj_tag}"
+                f"_T{args.temperature}"
+                f"{level_tag}"
+            )
     else:
         ckpt_suffix = f"{args.model}-latent{args.latent_dim}-kld{args.kld_weight}"
         if args.weak_sigreg_weight > 0:
@@ -367,7 +413,7 @@ def main() -> None:
 
     callbacks = [checkpoint_callback, lr_monitor]
 
-    if is_dino:
+    if is_dino and not args.ssl_lejepa:
         knn_checkpoint_callback = ModelCheckpoint(
             dirpath=ckpt_dir,
             filename=args.model + "-best-knn-{epoch:02d}-{val_batch_knn_acc:.4f}",

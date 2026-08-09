@@ -252,6 +252,48 @@ class ContrastiveImageDataset(Dataset):
         return self.transform(img), label
 
 
+def build_ssl_transform(img_size: int, rotation: float = 30.0,
+                        translate: float = 0.1) -> T.Compose:
+    """Stochastic augmentation pipeline producing one random view of an image
+    for self-supervised (LeJEPA) training.
+
+    Uses only geometric augmentations (random rotation and translation), so
+    drawing the transform ``V`` times from the same image gives ``V`` correlated
+    views. Output is a float tensor normalized with ImageNet statistics (DINOv2).
+    """
+    return T.Compose([
+        T.Resize((img_size, img_size), antialias=True),
+        T.RandomAffine(degrees=rotation, translate=(translate, translate)),
+        T.ConvertImageDtype(torch.float32),
+        T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+    ])
+
+
+class MultiViewImageDataset(Dataset):
+    """Loads images and returns ``num_views`` independently augmented views of
+    each image for self-supervised (LeJEPA) training.
+
+    Each item is ``(views, label)`` where ``views`` is a stacked tensor of shape
+    ``[num_views, C, H, W]``. The label is retained only for optional monitoring;
+    the LeJEPA objective itself is label-free.
+    """
+
+    def __init__(self, samples: List[Tuple[str, int]], transform: T.Compose,
+                 num_views: int = 2) -> None:
+        self.samples = samples
+        self.transform = transform
+        self.num_views = num_views
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, int]:
+        path, label = self.samples[index]
+        img = read_image(path, mode=ImageReadMode.RGB)
+        views = torch.stack([self.transform(img) for _ in range(self.num_views)])
+        return views, label
+
+
 class ContrastiveDataModule(pl.LightningDataModule):
     """LightningDataModule serving synthesis-program-labelled images for
     supervised contrastive (InfoNCE / SupCon) training of the DINOv2+LoRA model.
@@ -301,6 +343,10 @@ class ContrastiveDataModule(pl.LightningDataModule):
                  classes_per_batch: int = 0,
                  samples_per_class: int = 0,
                  compound_level: bool = False,
+                 ssl_mode: bool = False,
+                 ssl_views: int = 2,
+                 ssl_rotation: float = 30.0,
+                 ssl_translate: float = 0.1,
                  seed: int = 42) -> None:
         super().__init__()
         self.image_metadata_json = image_metadata_json
@@ -318,6 +364,10 @@ class ContrastiveDataModule(pl.LightningDataModule):
         self.classes_per_batch = classes_per_batch
         self.samples_per_class = samples_per_class
         self.compound_level = compound_level
+        self.ssl_mode = ssl_mode
+        self.ssl_views = ssl_views
+        self.ssl_rotation = ssl_rotation
+        self.ssl_translate = ssl_translate
         self.seed = seed
 
         self.classes: List[str] = []
@@ -331,7 +381,8 @@ class ContrastiveDataModule(pl.LightningDataModule):
 
     @property
     def use_pk_sampler(self) -> bool:
-        return self.classes_per_batch > 0 and self.samples_per_class > 0
+        return (not self.ssl_mode
+                and self.classes_per_batch > 0 and self.samples_per_class > 0)
 
     def _build_transform(self) -> T.Compose:
         return T.Compose([
@@ -463,6 +514,27 @@ class ContrastiveDataModule(pl.LightningDataModule):
         # not serve compound-grouped batches, which would inflate batch-level
         # metrics like kNN accuracy.
         rng.shuffle(val_samples)
+
+        if self.ssl_mode:
+            # Self-supervised (LeJEPA): each item yields ``ssl_views`` randomly
+            # augmented views; labels are ignored by the objective.
+            ssl_transform = build_ssl_transform(
+                self.img_size,
+                rotation=self.ssl_rotation,
+                translate=self.ssl_translate,
+            )
+            self.train_dataset = MultiViewImageDataset(
+                train_samples, ssl_transform, num_views=self.ssl_views)
+            self.val_dataset = MultiViewImageDataset(
+                val_samples, ssl_transform, num_views=self.ssl_views)
+            self._train_labels = [label for _, label in train_samples]
+            self._val_labels = [label for _, label in val_samples]
+            print(
+                f"[ContrastiveDataModule] SSL/LeJEPA mode: {self.ssl_views} views "
+                f"per image, {len(train_samples)} train / {len(val_samples)} val",
+                flush=True,
+            )
+            return
 
         transform = self._build_transform()
         self.train_dataset = ContrastiveImageDataset(train_samples, transform)

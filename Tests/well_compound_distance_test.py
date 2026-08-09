@@ -56,7 +56,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from Models import VAE, TiltedVAE
+from Models import VAE, TiltedVAE, DinoV2LoRA
 
 
 class DinoV2Wrapper(torch.nn.Module):
@@ -101,7 +101,7 @@ def parse_args() -> argparse.Namespace:
                         help="Trained Lightning checkpoint (.ckpt) or state_dict (.pt/.pth) "
                             "(required unless --embedding is provided or --model dino)")
     parser.add_argument("--model", type=str, default="tilted",
-                        choices=["vae", "tilted", "dino"],
+                        choices=["vae", "tilted", "dino", "dino_lora"],
                         help="Model architecture matching the checkpoint")
     parser.add_argument("--in_channels", type=int, default=3)
     parser.add_argument("--latent_dim", type=int, default=128)
@@ -146,6 +146,11 @@ def parse_args() -> argparse.Namespace:
         if args.in_channels != 3:
             parser.error("--model dino requires --in_channels 3")
         args.img_size = DinoV2Wrapper.IMG_SIZE
+
+    if args.model == "dino_lora":
+        if args.in_channels != 3:
+            parser.error("--model dino_lora requires --in_channels 3")
+        args.img_size = 224
 
     return args
 
@@ -216,6 +221,11 @@ def load_well_means_from_embedding(
 def build_model(args: argparse.Namespace) -> torch.nn.Module:
     if args.model == "dino":
         return DinoV2Wrapper()
+    if args.model == "dino_lora":
+        return DinoV2LoRA(
+            img_size=args.img_size,
+            embedding_dim=args.latent_dim,
+        )
     if args.model == "tilted":
         return TiltedVAE(
             in_channels=args.in_channels,
@@ -275,7 +285,8 @@ def encode_paths(
         if not imgs:
             continue
         batch = torch.stack(imgs, dim=0).to(device)
-        mu, _ = model.encode(batch)
+        out = model.encode(batch)
+        mu = out if isinstance(out, torch.Tensor) else out[0]
         latents.append(mu.cpu())
     return torch.cat(latents, dim=0) if latents else torch.empty(0)
 

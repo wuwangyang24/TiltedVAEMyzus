@@ -166,15 +166,21 @@ class DinoV2LoRA(nn.Module):
         """Return only the trainable (LoRA + projection head) parameters."""
         return [p for p in self.parameters() if p.requires_grad]
 
-    def encode(self, x: Tensor) -> Tensor:
-        """Return L2-normalized embeddings for a batch of images [N, 3, H, W]."""
+    def encode(self, x: Tensor, normalize: bool = True) -> Tensor:
+        """Return embeddings for a batch of images [N, 3, H, W].
+
+        By default the embeddings are L2-normalized (for the cosine-similarity
+        contrastive objective). Pass ``normalize=False`` to obtain the raw
+        projected features, e.g. for the LeJEPA / SIGReg objective whose target
+        is an isotropic Gaussian in unbounded Euclidean space.
+        """
         feats = self.backbone(x)          # (N, feat_dim)
         if self.projection is not None:
             feats = self.projection(feats)  # (N, embedding_dim)
-        return F.normalize(feats, dim=1)
+        return F.normalize(feats, dim=1) if normalize else feats
 
-    def forward(self, x: Tensor, **kwargs) -> Tensor:
-        return self.encode(x)
+    def forward(self, x: Tensor, normalize: bool = True, **kwargs) -> Tensor:
+        return self.encode(x, normalize=normalize)
 
     def loss_function(self, embeddings: Tensor, labels: Tensor,
                       **kwargs) -> Dict[str, Tensor]:
@@ -229,6 +235,120 @@ class DinoV2LoRA(nn.Module):
                 **knn_accs,
             }
         return {"loss": loss, **metrics}
+
+    def lejepa_loss_function(self, view_embeddings: Tensor,
+                             sigreg_weight: float = 1.0,
+                             sigreg_slices: int = 512,
+                             sigreg_num_freqs: int = 33,
+                             sigreg_t_max: float = 8.0,
+                             **kwargs) -> Dict[str, Tensor]:
+        """LeJEPA self-supervised loss (Balestriero & LeCun, 2025).
+
+        Combines two terms and needs no labels:
+          * Prediction (invariance): embeddings of different augmented views of
+            the same image are pulled together (each view towards the per-image
+            mean over views).
+          * SIGReg: the aggregate embedding distribution is regularized towards
+            an isotropic standard Gaussian via the sketched Epps-Pulley
+            characteristic-function test, which provably prevents collapse.
+
+        Args:
+            view_embeddings: (V, N, D) raw (un-normalized) embeddings, where V
+                is the number of augmented views and N the images per batch.
+            sigreg_weight: weight of the SIGReg term relative to prediction.
+            sigreg_slices: number of random 1-D projections for SIGReg.
+            sigreg_num_freqs: quadrature points for the Epps-Pulley integral.
+            sigreg_t_max: half-width of the frequency integration grid.
+
+        Returns a dict with the scalar ``loss`` and monitoring metrics.
+        """
+        if view_embeddings.dim() != 3:
+            raise ValueError(
+                "lejepa_loss_function expects (V, N, D) view embeddings, got "
+                f"shape {tuple(view_embeddings.shape)}."
+            )
+        v, n, d = view_embeddings.shape
+
+        # Prediction / invariance: pull each view towards the per-image mean.
+        mean_emb = view_embeddings.mean(dim=0, keepdim=True)      # (1, N, D)
+        pred_loss = ((view_embeddings - mean_emb) ** 2).sum(dim=-1).mean()
+
+        # SIGReg over all views/images stacked together.
+        z = view_embeddings.reshape(v * n, d)
+        sigreg_loss = self._sigreg_loss(
+            z, sigreg_slices, sigreg_num_freqs, sigreg_t_max)
+
+        loss = pred_loss + sigreg_weight * sigreg_loss
+
+        with torch.no_grad():
+            # Cross-view alignment: mean cosine similarity between the two most
+            # separated views (view 0 vs view 1) as a collapse/quality monitor.
+            z0 = F.normalize(view_embeddings[0], dim=1)
+            z1 = F.normalize(view_embeddings[min(1, v - 1)], dim=1)
+            view_cos = (z0 * z1).sum(dim=1).mean()
+            metrics = {
+                "pred_loss": pred_loss.detach(),
+                "sigreg_loss": sigreg_loss.detach(),
+                "view_cos_sim": view_cos,
+                "emb_std": z.std(dim=0).mean(),
+                **self._gaussianity_metrics(z),
+            }
+        return {"loss": loss, **metrics}
+
+    @staticmethod
+    @torch.no_grad()
+    def _gaussianity_metrics(z: Tensor) -> Dict[str, Tensor]:
+        """Diagnostics of how close the embedding batch is to an isotropic
+        standard Gaussian N(0, I). All are monitoring-only (no gradient).
+
+        Ideal values for a true N(0, I) sample:
+          * ``emb_mean_abs``   -> 0   (zero-centered)
+          * ``emb_std``        -> 1   (unit per-dimension variance; see caller)
+          * ``emb_norm_ratio`` -> 1   (E[||z||^2] / D equals 1)
+        """
+        m, d = z.shape
+        emb_mean_abs = z.mean(dim=0).abs().mean()
+        emb_norm_ratio = (z.pow(2).sum(dim=1).mean() / d)
+
+        return {
+            "emb_mean_abs": emb_mean_abs,
+            "emb_norm_ratio": emb_norm_ratio,
+        }
+
+    @staticmethod
+    def _sigreg_loss(z: Tensor, num_slices: int = 512, num_freqs: int = 33,
+                     t_max: float = 8.0) -> Tensor:
+        """Sketched Isotropic Gaussian Regularization (SIGReg).
+
+        Projects the embeddings onto ``num_slices`` random directions drawn
+        uniformly on the unit sphere and, for each 1-D projection, measures its
+        deviation from a standard normal N(0, 1) with the Epps-Pulley
+        empirical-characteristic-function goodness-of-fit statistic. Averaged
+        over slices this is a differentiable, unbiased estimate of the distance
+        between the embedding distribution and an isotropic Gaussian.
+        """
+        m, d = z.shape
+        device, dtype = z.device, z.dtype
+
+        # Random projection directions, uniform on the unit sphere.
+        dirs = torch.randn(d, num_slices, device=device, dtype=dtype)
+        dirs = F.normalize(dirs, dim=0)
+        proj = z @ dirs                                   # (M, num_slices)
+
+        # Frequency grid and Gaussian weighting w(t) = exp(-t^2 / 2).
+        t = torch.linspace(-t_max, t_max, num_freqs, device=device, dtype=dtype)
+        weight = torch.exp(-0.5 * t ** 2)                 # (F,)
+
+        # Empirical characteristic function per slice: E_j[exp(i t x_j)].
+        tp = t.view(1, -1, 1) * proj.t().unsqueeze(1)     # (num_slices, F, M)
+        emp_re = torch.cos(tp).mean(dim=2)                # (num_slices, F)
+        emp_im = torch.sin(tp).mean(dim=2)
+        tgt_re = torch.exp(-0.5 * t ** 2)                 # N(0,1) CF (imag = 0)
+
+        diff2 = (emp_re - tgt_re) ** 2 + emp_im ** 2      # (num_slices, F)
+        dt = t[1] - t[0]
+        stat = (diff2 * weight).sum(dim=1) * dt           # (num_slices,)
+        return stat.mean()
 
     @staticmethod
     @torch.no_grad()

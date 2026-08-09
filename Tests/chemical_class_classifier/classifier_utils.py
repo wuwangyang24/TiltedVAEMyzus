@@ -70,7 +70,9 @@ def build_mean_latent_features(
             if treated is None or treated.numel() == 0:
                 continue
             if subtract_control:
-                control = plate_data.get(control_key) or plate_data.get("control")
+                control = plate_data.get(control_key)
+                if control is None:
+                    control = plate_data.get("control")
                 if control is not None:
                     if normalize_before_subtract:
                         treated = _l2_normalize(treated)
