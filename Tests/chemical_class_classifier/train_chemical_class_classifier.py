@@ -84,7 +84,6 @@ from classifier_utils import (
     build_label_encoder,
     save_label_encoder,
     save_results,
-    plot_cluster_visualization,
 )
 from classifier_tuning import _tune_catboost
 
@@ -332,22 +331,7 @@ def _run_catboost(
     else:
         print(f"  Train: {len(y_train)}  |  Test: {len(y_test)}")
 
-    # ── Dimension-reduction cluster visualisation ─────────────────────────────
     emb_stem = Path(args.embeddings).stem
-    split_labels = np.array(
-        ["train"] * len(y_train)
-        + (["val"] * len(y_val) if y_val is not None else [])
-        + ["test"] * len(y_test)
-    )
-    X_all = np.concatenate([X_train] + ([X_val] if X_val is not None else []) + [X_test])
-    y_all = np.concatenate([y_train] + ([y_val] if y_val is not None else []) + [y_test])
-    plot_cluster_visualization(
-        X=X_all, y=y_all, classes=classes,
-        output_dir=output_dir,
-        file_suffix=f"_{emb_stem}",
-        split_labels=split_labels,
-        seed=args.seed,
-    )
 
     # ── Optional hyperparameter tuning (requires val set) ─────────────────────
     if args.tune:
