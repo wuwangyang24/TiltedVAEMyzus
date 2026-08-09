@@ -237,14 +237,15 @@ class DinoV2LoRA(nn.Module):
         return {"loss": loss, **metrics}
 
     def lejepa_loss_function(self, view_embeddings: Tensor,
-                             sigreg_weight: float = 1.0,
+                             sigreg_weight: float = 0.05,
                              sigreg_slices: int = 512,
                              sigreg_num_freqs: int = 33,
                              sigreg_t_max: float = 8.0,
                              **kwargs) -> Dict[str, Tensor]:
         """LeJEPA self-supervised loss (Balestriero & LeCun, 2025).
 
-        Combines two terms and needs no labels:
+        Combines two terms and needs no labels, via the convex weighting
+        ``loss = (1 - lambda) * prediction + lambda * SIGReg``:
           * Prediction (invariance): embeddings of different augmented views of
             the same image are pulled together (each view towards the per-image
             mean over views).
@@ -255,7 +256,8 @@ class DinoV2LoRA(nn.Module):
         Args:
             view_embeddings: (V, N, D) raw (un-normalized) embeddings, where V
                 is the number of augmented views and N the images per batch.
-            sigreg_weight: weight of the SIGReg term relative to prediction.
+            sigreg_weight: lambda in [0, 1] balancing SIGReg vs prediction
+                (paper default 0.05).
             sigreg_slices: number of random 1-D projections for SIGReg.
             sigreg_num_freqs: quadrature points for the Epps-Pulley integral.
             sigreg_t_max: half-width of the frequency integration grid.
@@ -278,7 +280,10 @@ class DinoV2LoRA(nn.Module):
         sigreg_loss = self._sigreg_loss(
             z, sigreg_slices, sigreg_num_freqs, sigreg_t_max)
 
-        loss = pred_loss + sigreg_weight * sigreg_loss
+        # Convex LeJEPA weighting (Balestriero & LeCun, 2025): lambda balances
+        # the isotropic-Gaussian (SIGReg) and invariance (prediction) terms.
+        lam = sigreg_weight
+        loss = (1.0 - lam) * pred_loss + lam * sigreg_loss
 
         with torch.no_grad():
             # Cross-view alignment: mean cosine similarity between the two most

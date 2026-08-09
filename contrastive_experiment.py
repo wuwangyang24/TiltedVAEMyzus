@@ -124,7 +124,7 @@ class LeJEPAExperiment(pl.LightningModule):
                  model: DinoV2LoRA,
                  lr: float = 1e-4,
                  weight_decay: float = 1e-4,
-                 sigreg_weight: float = 1.0,
+                 sigreg_weight: float = 0.05,
                  sigreg_slices: int = 512,
                  sigreg_num_freqs: int = 33,
                  scheduler_gamma: float = 0.95,

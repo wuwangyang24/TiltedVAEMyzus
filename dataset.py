@@ -253,16 +253,20 @@ class ContrastiveImageDataset(Dataset):
 
 
 def build_ssl_transform(img_size: int, rotation: float = 30.0,
-                        translate: float = 0.1) -> T.Compose:
+                        translate: float = 0.1,
+                        min_scale: float = 0.5) -> T.Compose:
     """Stochastic augmentation pipeline producing one random view of an image
     for self-supervised (LeJEPA) training.
 
-    Uses only geometric augmentations (random rotation and translation), so
-    drawing the transform ``V`` times from the same image gives ``V`` correlated
-    views. Output is a float tensor normalized with ImageNet statistics (DINOv2).
+    Uses geometric augmentations only: a random-resized crop (scale in
+    ``[min_scale, 1.0]``) that makes the two views differ in framing/zoom, plus
+    random rotation and translation. Drawing the transform ``V`` times from the
+    same image gives ``V`` correlated views. Output is a float tensor normalized
+    with ImageNet statistics (DINOv2).
     """
     return T.Compose([
-        T.Resize((img_size, img_size), antialias=True),
+        T.RandomResizedCrop(
+            (img_size, img_size), scale=(min_scale, 1.0), antialias=True),
         T.RandomAffine(degrees=rotation, translate=(translate, translate)),
         T.ConvertImageDtype(torch.float32),
         T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
@@ -347,6 +351,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
                  ssl_views: int = 2,
                  ssl_rotation: float = 30.0,
                  ssl_translate: float = 0.1,
+                 ssl_min_scale: float = 0.5,
                  seed: int = 42) -> None:
         super().__init__()
         self.image_metadata_json = image_metadata_json
@@ -368,6 +373,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
         self.ssl_views = ssl_views
         self.ssl_rotation = ssl_rotation
         self.ssl_translate = ssl_translate
+        self.ssl_min_scale = ssl_min_scale
         self.seed = seed
 
         self.classes: List[str] = []
@@ -522,6 +528,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
                 self.img_size,
                 rotation=self.ssl_rotation,
                 translate=self.ssl_translate,
+                min_scale=self.ssl_min_scale,
             )
             self.train_dataset = MultiViewImageDataset(
                 train_samples, ssl_transform, num_views=self.ssl_views)

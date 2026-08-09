@@ -123,9 +123,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ssl_translate", type=float, default=0.1,
                         help="Max random translation (fraction of image size) for "
                              "LeJEPA augmentations.")
-    parser.add_argument("--sigreg_weight", type=float, default=1.0,
-                        help="Weight of the SIGReg term relative to the LeJEPA "
-                             "prediction/invariance term.")
+    parser.add_argument("--ssl_min_scale", type=float, default=0.5,
+                        help="Min RandomResizedCrop scale for LeJEPA views (crop covers "
+                             "[min_scale, 1.0] of the image area). Default: 0.5")
+    parser.add_argument("--sigreg_weight", type=float, default=0.05,
+                        help="Lambda in [0,1] for the convex LeJEPA loss "
+                             "(1-lambda)*prediction + lambda*SIGReg. Paper default: 0.05")
     parser.add_argument("--sigreg_slices", type=int, default=512,
                         help="Number of random 1-D projections for SIGReg. Default: 512")
     parser.add_argument("--sigreg_num_freqs", type=int, default=33,
@@ -279,6 +282,7 @@ def main() -> None:
             ssl_views=args.ssl_views,
             ssl_rotation=args.ssl_rotation,
             ssl_translate=args.ssl_translate,
+            ssl_min_scale=args.ssl_min_scale,
             seed=args.seed,
         )
 
