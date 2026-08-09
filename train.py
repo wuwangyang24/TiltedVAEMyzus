@@ -389,7 +389,7 @@ def main() -> None:
                 f"DINO_LoRA_{targets_tag}"
                 f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
                 f"_{proj_tag}"
-                f"_LeJEPA_V{args.ssl_views}_SW{args.sigreg_weight}"
+                f"_LeJEPA_Views{args.ssl_views}_SW{args.sigreg_weight}"
             )
         else:
             ckpt_suffix = (
