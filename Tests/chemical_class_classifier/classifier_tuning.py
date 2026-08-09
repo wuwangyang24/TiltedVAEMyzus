@@ -5,6 +5,7 @@ Randomized hyperparameter search for the CatBoost chemical-class classifier
 """
 
 import argparse
+import gc
 import json
 from pathlib import Path
 from typing import Dict, Optional
@@ -92,6 +93,11 @@ def _tune_catboost(
               f"lr={config['learning_rate']:.3f}  l2={config['l2_leaf_reg']:.1f}  "
               f"cw={config['auto_class_weights']:<12s}  "
               f"F1={trial_f1:.4f}  Acc={trial_acc:.4f}{'  * BEST' if is_best else ''}")
+
+        # Release CatBoost GPU handles before building the next model to avoid
+        # a CUDA handle leak when training many models in a loop.
+        del clf
+        gc.collect()
 
     print(f"\n  Best trial Acc: {best_acc:.4f}")
     print(f"  Best params: {best_params}")
