@@ -120,6 +120,10 @@ def parse_args() -> argparse.Namespace:
                    help="Use projection head (default: True)")
     p.add_argument("--no_proj_head", action="store_true",
                    help="Disable projection head (output backbone features directly)")
+    p.add_argument("--raw_embeddings", action="store_true",
+                   help="Output un-normalized embeddings (dino_lora only). Recommended "
+                        "for LeJEPA/SSL checkpoints, whose SIGReg target lives in raw "
+                        "Euclidean space; the default L2-normalizes (for contrastive).")
 
     # Pre-filtering by class membership
     p.add_argument("--class_metadata", default=None,
@@ -398,13 +402,16 @@ def main() -> None:
 
     # Encode everything in one pass
     all_latents: List[torch.Tensor] = []
+    # LeJEPA/SSL checkpoints keep raw (un-normalized) embeddings.
+    encode_kwargs = ({"normalize": False}
+                     if args.model == "dino_lora" and args.raw_embeddings else {})
     with torch.no_grad():
         for batch in tqdm(loader, desc="Encoding"):
             if batch is None:
                 all_latents.append(torch.empty(0))
                 continue
             batch = batch.to(device, non_blocking=True)
-            out = model.encode(batch)
+            out = model.encode(batch, **encode_kwargs)
             mu = out if isinstance(out, torch.Tensor) else out[0]
             all_latents.append(mu.cpu())
 
