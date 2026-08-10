@@ -395,12 +395,15 @@ def main() -> None:
         level_tag = "_Comp" if args.compound_level else ""
         if args.ssl_lejepa:
             cv_tag = "_CompViews" if args.ssl_compound_views else ""
+            # Compact augmentation summary: Rot/Trans/Scale/Blur
+            aug_tag = (f"_Aug-R{args.ssl_rotation:.0f}T{args.ssl_translate}"
+                       f"S{args.ssl_min_scale}B{args.ssl_gaussian_blur}")
             ckpt_suffix = (
                 f"DINO_LoRA_{targets_tag}"
                 f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
                 f"_{proj_tag}"
                 f"_LeJEPA_Views{args.ssl_views}_SW{args.sigreg_weight}"
-                f"{cv_tag}"
+                f"{cv_tag}{aug_tag}"
             )
         else:
             ckpt_suffix = (
