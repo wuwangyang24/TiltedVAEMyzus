@@ -120,6 +120,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--normalize_after_subtract", action="store_true",
                    help="L2-normalize treated embeddings after control subtraction "
                         "(requires --subtract_control)")
+    p.add_argument("--normalize", action="store_true",
+                   help="L2-normalize treated embeddings (only when --subtract_control is not set)")
     p.add_argument("--normalize_MAD", action="store_true",
                    help="Normalize features by median absolute deviation (subtract median, "
                         "divide by MAD) per dimension after building the feature matrix")
@@ -282,6 +284,7 @@ def _run_catboost(
         normalize_before_subtract=args.normalize_before_subtract,
         normalize_after_subtract=args.normalize_after_subtract,
         normalize_MAD=args.normalize_MAD,
+        normalize=args.normalize,
     )
     print(f"  {X.shape[0]} compounds with valid features.")
     print(f"  Feature dim (D) : {X.shape[1]}")
