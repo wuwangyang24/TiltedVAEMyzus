@@ -110,6 +110,9 @@ def parse_args() -> argparse.Namespace:
                              "instead of the synthesis-program level: each compound "
                              "becomes its own class, so positives are images of the "
                              "same compound (across plates/replicates).")
+    parser.add_argument("--contrastive_sigreg_loss", action="store_true",
+                        help="Replace negatives in the contrastive loss with SIGReg "
+                             "regularization for collapse prevention.")
 
     # LeJEPA self-supervised training (only used when --model dino_lora)
     parser.add_argument("--ssl_lejepa", action="store_true",
@@ -331,6 +334,9 @@ def main() -> None:
                 scheduler=args.scheduler,
                 warmup_epochs=args.warmup_epochs,
                 max_epochs=args.epochs,
+                contrastive_sigreg_loss=args.contrastive_sigreg_loss,
+                sigreg_weight=args.sigreg_weight,
+                sigreg_slices=args.sigreg_slices,
             )
     else:
         if not args.data_dir:

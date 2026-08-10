@@ -29,7 +29,10 @@ class ContrastiveExperiment(pl.LightningModule):
                  scheduler_gamma: float = 0.95,
                  scheduler: str = "exponential",
                  warmup_epochs: int = 0,
-                 max_epochs: int = 100) -> None:
+                 max_epochs: int = 100,
+                 contrastive_sigreg_loss: bool = False,
+                 sigreg_weight: float = 0.1,
+                 sigreg_slices: int = 512) -> None:
         super().__init__()
         self.model = model
         self.lr = lr
@@ -39,6 +42,9 @@ class ContrastiveExperiment(pl.LightningModule):
         self.scheduler_type = scheduler
         self.warmup_epochs = warmup_epochs
         self.max_epochs = max_epochs
+        self.contrastive_sigreg_loss = contrastive_sigreg_loss
+        self.sigreg_weight = sigreg_weight
+        self.sigreg_slices = sigreg_slices
         self.save_hyperparameters(ignore=["model"])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -46,6 +52,12 @@ class ContrastiveExperiment(pl.LightningModule):
 
     def _step(self, batch: Any) -> Dict[str, torch.Tensor]:
         images, labels = batch
+        if self.contrastive_sigreg_loss:
+            embeddings = self.model(images, normalize=False)
+            return self.model.contrastive_sigreg_loss_function(
+                embeddings, labels, temperature=self.temperature,
+                sigreg_weight=self.sigreg_weight,
+                sigreg_slices=self.sigreg_slices)
         embeddings = self.model(images)
         return self.model.loss_function(
             embeddings, labels, temperature=self.temperature)
