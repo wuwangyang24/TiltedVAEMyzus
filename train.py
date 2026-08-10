@@ -126,6 +126,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ssl_min_scale", type=float, default=0.5,
                         help="Min RandomResizedCrop scale for LeJEPA views (crop covers "
                              "[min_scale, 1.0] of the image area). Default: 0.5")
+    parser.add_argument("--ssl_compound_views", action="store_true",
+                        help="Use different images from the same compound as views "
+                             "instead of augmenting a single image multiple times. "
+                             "Only used with --ssl_lejepa.")
     parser.add_argument("--sigreg_weight", type=float, default=0.05,
                         help="Lambda in [0,1] for the convex LeJEPA loss "
                              "(1-lambda)*prediction + lambda*SIGReg. Paper default: 0.05")
@@ -283,6 +287,7 @@ def main() -> None:
             ssl_rotation=args.ssl_rotation,
             ssl_translate=args.ssl_translate,
             ssl_min_scale=args.ssl_min_scale,
+            ssl_compound_views=args.ssl_compound_views,
             seed=args.seed,
         )
 
@@ -385,11 +390,13 @@ def main() -> None:
         k_val = args.contrastive_samples_per_class
         level_tag = "_Comp" if args.compound_level else ""
         if args.ssl_lejepa:
+            cv_tag = "_CompViews" if args.ssl_compound_views else ""
             ckpt_suffix = (
                 f"DINO_LoRA_{targets_tag}"
                 f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
                 f"_{proj_tag}"
                 f"_LeJEPA_Views{args.ssl_views}_SW{args.sigreg_weight}"
+                f"{cv_tag}"
             )
         else:
             ckpt_suffix = (

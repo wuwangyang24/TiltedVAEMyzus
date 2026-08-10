@@ -298,6 +298,45 @@ class MultiViewImageDataset(Dataset):
         return views, label
 
 
+class CompoundViewDataset(Dataset):
+    """SSL dataset that uses different images of the same compound as views.
+
+    Instead of augmenting a single image multiple times, this samples
+    ``num_views`` distinct images from the same compound. Each image still
+    receives the stochastic transform (crop/rotation) but the views are
+    fundamentally different biological replicates.
+
+    When a compound has fewer images than ``num_views``, images are resampled
+    with replacement.
+    """
+
+    def __init__(self, compound_groups: List[Tuple[List[str], int]],
+                 transform: T.Compose, num_views: int = 2) -> None:
+        """
+        Args:
+            compound_groups: list of (image_paths, label) per compound.
+            transform: stochastic augmentation applied to each sampled image.
+            num_views: number of images to sample per compound per item.
+        """
+        self.compound_groups = compound_groups
+        self.transform = transform
+        self.num_views = num_views
+
+    def __len__(self) -> int:
+        return len(self.compound_groups)
+
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, int]:
+        paths, label = self.compound_groups[index]
+        # Sample num_views paths (with replacement if fewer available).
+        indices = np.random.choice(len(paths), size=self.num_views,
+                                   replace=len(paths) < self.num_views)
+        views = []
+        for i in indices:
+            img = read_image(paths[i], mode=ImageReadMode.RGB)
+            views.append(self.transform(img))
+        return torch.stack(views), label
+
+
 class ContrastiveDataModule(pl.LightningDataModule):
     """LightningDataModule serving synthesis-program-labelled images for
     supervised contrastive (InfoNCE / SupCon) training of the DINOv2+LoRA model.
@@ -352,6 +391,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
                  ssl_rotation: float = 30.0,
                  ssl_translate: float = 0.1,
                  ssl_min_scale: float = 0.5,
+                 ssl_compound_views: bool = False,
                  seed: int = 42) -> None:
         super().__init__()
         self.image_metadata_json = image_metadata_json
@@ -374,6 +414,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
         self.ssl_rotation = ssl_rotation
         self.ssl_translate = ssl_translate
         self.ssl_min_scale = ssl_min_scale
+        self.ssl_compound_views = ssl_compound_views
         self.seed = seed
 
         self.classes: List[str] = []
@@ -459,6 +500,8 @@ class ContrastiveDataModule(pl.LightningDataModule):
 
         subsets = ("treated", "control") if self.use_control else ("treated",)
         samples: List[Tuple[str, int]] = []
+        # Also track compound membership for ssl_compound_views grouping.
+        compound_to_sample_indices: Dict[str, List[int]] = {}
         for entry in metadata:
             cid = str(entry["Compound"])
             if cid not in comp2label:
@@ -469,6 +512,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
                     continue
                 for subset in subsets:
                     for rel in plate_data.get(subset, []):
+                        compound_to_sample_indices.setdefault(cid, []).append(len(samples))
                         samples.append((os.path.join(self.root_dir, rel), label_idx))
 
         if not samples:
@@ -487,10 +531,18 @@ class ContrastiveDataModule(pl.LightningDataModule):
         old2new = {old: new for new, old in enumerate(actual_labels)}
         samples = [(path, old2new[label]) for path, label in samples]
 
-        return samples
+        # Rebuild compound groups with remapped labels.
+        compound_groups: Dict[str, Tuple[List[str], int]] = {}
+        for cid, idxs in compound_to_sample_indices.items():
+            paths_for_compound = [samples[i][0] for i in idxs if i < len(samples)]
+            if paths_for_compound:
+                label = samples[idxs[0]][1]
+                compound_groups[cid] = (paths_for_compound, label)
+
+        return samples, compound_groups
 
     def setup(self, stage: Optional[str] = None) -> None:
-        samples = self._build_samples()
+        samples, compound_groups = self._build_samples()
 
         rng = np.random.default_rng(self.seed)
 
@@ -530,17 +582,42 @@ class ContrastiveDataModule(pl.LightningDataModule):
                 translate=self.ssl_translate,
                 min_scale=self.ssl_min_scale,
             )
-            self.train_dataset = MultiViewImageDataset(
-                train_samples, ssl_transform, num_views=self.ssl_views)
-            self.val_dataset = MultiViewImageDataset(
-                val_samples, ssl_transform, num_views=self.ssl_views)
-            self._train_labels = [label for _, label in train_samples]
-            self._val_labels = [label for _, label in val_samples]
-            print(
-                f"[ContrastiveDataModule] SSL/LeJEPA mode: {self.ssl_views} views "
-                f"per image, {len(train_samples)} train / {len(val_samples)} val",
-                flush=True,
-            )
+
+            if self.ssl_compound_views:
+                # Use different images from the same compound as views.
+                # Split compound groups into train/val.
+                all_cids = list(compound_groups.keys())
+                rng.shuffle(all_cids)
+                n_val_compounds = max(1, int(len(all_cids) * self.val_split))
+                val_cids = set(all_cids[:n_val_compounds])
+                train_groups = [compound_groups[c] for c in all_cids
+                                if c not in val_cids]
+                val_groups = [compound_groups[c] for c in all_cids
+                              if c in val_cids]
+                self.train_dataset = CompoundViewDataset(
+                    train_groups, ssl_transform, num_views=self.ssl_views)
+                self.val_dataset = CompoundViewDataset(
+                    val_groups, ssl_transform, num_views=self.ssl_views)
+                self._train_labels = [label for _, label in train_groups]
+                self._val_labels = [label for _, label in val_groups]
+                print(
+                    f"[ContrastiveDataModule] SSL/LeJEPA compound-view mode: "
+                    f"{self.ssl_views} images/compound, "
+                    f"{len(train_groups)} train / {len(val_groups)} val compounds",
+                    flush=True,
+                )
+            else:
+                self.train_dataset = MultiViewImageDataset(
+                    train_samples, ssl_transform, num_views=self.ssl_views)
+                self.val_dataset = MultiViewImageDataset(
+                    val_samples, ssl_transform, num_views=self.ssl_views)
+                self._train_labels = [label for _, label in train_samples]
+                self._val_labels = [label for _, label in val_samples]
+                print(
+                    f"[ContrastiveDataModule] SSL/LeJEPA mode: {self.ssl_views} views "
+                    f"per image, {len(train_samples)} train / {len(val_samples)} val",
+                    flush=True,
+                )
             return
 
         transform = self._build_transform()
