@@ -126,6 +126,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ssl_min_scale", type=float, default=0.5,
                         help="Min RandomResizedCrop scale for LeJEPA views (crop covers "
                              "[min_scale, 1.0] of the image area). Default: 0.5")
+    parser.add_argument("--ssl_gaussian_blur", type=float, default=0.5,
+                        help="Probability of applying Gaussian blur to each LeJEPA view. "
+                             "0 disables blur. Default: 0.5")
     parser.add_argument("--ssl_compound_views", action="store_true",
                         help="Use different images from the same compound as views "
                              "instead of augmenting a single image multiple times. "
@@ -287,6 +290,7 @@ def main() -> None:
             ssl_rotation=args.ssl_rotation,
             ssl_translate=args.ssl_translate,
             ssl_min_scale=args.ssl_min_scale,
+            ssl_gaussian_blur=args.ssl_gaussian_blur,
             ssl_compound_views=args.ssl_compound_views,
             seed=args.seed,
         )

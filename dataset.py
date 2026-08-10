@@ -254,23 +254,33 @@ class ContrastiveImageDataset(Dataset):
 
 def build_ssl_transform(img_size: int, rotation: float = 30.0,
                         translate: float = 0.1,
-                        min_scale: float = 0.5) -> T.Compose:
+                        min_scale: float = 0.5,
+                        gaussian_blur: float = 0.5) -> T.Compose:
     """Stochastic augmentation pipeline producing one random view of an image
     for self-supervised (LeJEPA) training.
 
-    Uses geometric augmentations only: a random-resized crop (scale in
-    ``[min_scale, 1.0]``) that makes the two views differ in framing/zoom, plus
-    random rotation and translation. Drawing the transform ``V`` times from the
-    same image gives ``V`` correlated views. Output is a float tensor normalized
-    with ImageNet statistics (DINOv2).
+    Uses geometric augmentations and optional Gaussian blur: a random-resized
+    crop (scale in ``[min_scale, 1.0]``) that makes the two views differ in
+    framing/zoom, plus random rotation and translation, and Gaussian blur
+    applied with probability ``gaussian_blur``. Drawing the transform ``V``
+    times from the same image gives ``V`` correlated views. Output is a float
+    tensor normalized with ImageNet statistics (DINOv2).
     """
-    return T.Compose([
+    transforms = [
         T.RandomResizedCrop(
             (img_size, img_size), scale=(min_scale, 1.0), antialias=True),
         T.RandomAffine(degrees=rotation, translate=(translate, translate)),
+    ]
+    if gaussian_blur > 0:
+        kernel_size = img_size // 20 * 2 + 1  # odd kernel ~ 5% of image size
+        transforms.append(
+            T.RandomApply([T.GaussianBlur(kernel_size, sigma=(0.1, 2.0))],
+                          p=gaussian_blur))
+    transforms += [
         T.ConvertImageDtype(torch.float32),
         T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
-    ])
+    ]
+    return T.Compose(transforms)
 
 
 class MultiViewImageDataset(Dataset):
@@ -391,6 +401,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
                  ssl_rotation: float = 30.0,
                  ssl_translate: float = 0.1,
                  ssl_min_scale: float = 0.5,
+                 ssl_gaussian_blur: float = 0.5,
                  ssl_compound_views: bool = False,
                  seed: int = 42) -> None:
         super().__init__()
@@ -414,6 +425,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
         self.ssl_rotation = ssl_rotation
         self.ssl_translate = ssl_translate
         self.ssl_min_scale = ssl_min_scale
+        self.ssl_gaussian_blur = ssl_gaussian_blur
         self.ssl_compound_views = ssl_compound_views
         self.seed = seed
 
@@ -581,6 +593,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
                 rotation=self.ssl_rotation,
                 translate=self.ssl_translate,
                 min_scale=self.ssl_min_scale,
+                gaussian_blur=self.ssl_gaussian_blur,
             )
 
             if self.ssl_compound_views:
