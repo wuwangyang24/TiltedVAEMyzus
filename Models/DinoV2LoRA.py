@@ -252,7 +252,6 @@ class DinoV2LoRA(nn.Module):
 
         loss = (1 - lambda) * pos_attraction + lambda * SIGReg
         """
-        temperature = kwargs.get("temperature", self.temperature)
         device = embeddings.device
         n, d = embeddings.shape
         labels_col = labels.view(-1, 1)
@@ -265,10 +264,10 @@ class DinoV2LoRA(nn.Module):
 
         # Positive attraction via cosine similarity on normalized embeddings.
         normed = F.normalize(embeddings, dim=1)
-        sim = normed @ normed.t() / temperature
+        sim = normed @ normed.t()
         mean_pos_sim = (pos_mask * sim).sum(dim=1) / pos_per_anchor.clamp(min=1)
         if valid.any():
-            pos_loss = -mean_pos_sim[valid].mean()
+            pos_loss = 1.0 - mean_pos_sim[valid].mean()
         else:
             pos_loss = torch.zeros((), device=device, requires_grad=True)
 

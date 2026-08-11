@@ -412,6 +412,7 @@ def main() -> None:
                 f"{cv_tag}{aug_tag}"
             )
         else:
+            sigreg_tag = f"_SIGReg{args.sigreg_weight}" if args.contrastive_sigreg_loss else ""
             ckpt_suffix = (
                 f"DINO_LoRA_{targets_tag}"
                 f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
@@ -419,6 +420,7 @@ def main() -> None:
                 f"_{proj_tag}"
                 f"_T{args.temperature}"
                 f"{level_tag}"
+                f"{sigreg_tag}"
             )
     else:
         ckpt_suffix = f"{args.model}-latent{args.latent_dim}-kld{args.kld_weight}"
