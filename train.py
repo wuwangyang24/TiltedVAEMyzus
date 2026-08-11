@@ -385,18 +385,7 @@ def main() -> None:
             weak_sigreg_sketch_dim=args.weak_sigreg_sketch_dim,
         )
 
-    # Logger (Weights & Biases)
-    wandb_logger = WandbLogger(
-        project=args.project,
-        name=args.run_name,
-        entity=args.entity,
-        tags=args.tags,
-        save_dir=args.output_dir,
-        log_model=False,
-    )
-    wandb_logger.log_hyperparams(vars(args))
-
-    # Callbacks
+    # Build checkpoint suffix (also used as default W&B run name).
     if is_dino:
         targets_tag = "_".join(args.lora_targets)
         proj_tag = "Proj" if args.use_proj_head else "NoProj"
@@ -405,7 +394,6 @@ def main() -> None:
         level_tag = "_Comp" if args.compound_level else ""
         if args.ssl_lejepa:
             cv_tag = "_CompViews" if args.ssl_compound_views else ""
-            # Compact augmentation summary: Rot/Trans/Scale/Blur
             aug_tag = (f"_Aug-R{args.ssl_rotation:.0f}T{args.ssl_translate}"
                        f"S{args.ssl_min_scale}B{args.ssl_gaussian_blur}")
             ckpt_suffix = (
@@ -432,6 +420,19 @@ def main() -> None:
         ckpt_suffix = f"{args.model}-latent{args.latent_dim}-kld{args.kld_weight}"
         if args.weak_sigreg_weight > 0:
             ckpt_suffix += f"-weaksigreg{args.weak_sigreg_weight}"
+
+    # Logger (Weights & Biases)
+    wandb_logger = WandbLogger(
+        project=args.project,
+        name=args.run_name or ckpt_suffix,
+        entity=args.entity,
+        tags=args.tags,
+        save_dir=args.output_dir,
+        log_model=False,
+    )
+    wandb_logger.log_hyperparams(vars(args))
+
+    # Callbacks
     ckpt_dir = os.path.join(args.output_dir, "checkpoints", ckpt_suffix)
     checkpoint_callback = ModelCheckpoint(
         dirpath=ckpt_dir,
