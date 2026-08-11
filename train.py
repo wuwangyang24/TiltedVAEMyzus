@@ -7,7 +7,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
 from Models import VAE, TiltedVAE, DinoV2LoRA
-from dataset import VAEDataModule, ContrastiveDataModule
+from dataset import VAEDataModule, ContrastiveDataModule, InatDataModule
 from experiment import VAEExperiment
 from contrastive_experiment import ContrastiveExperiment, LeJEPAExperiment
 from Tests.chemical_class_classifier.classifier_callback import ChemicalClassClassifierCallback
@@ -22,6 +22,24 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a Convolutional VAE with PyTorch Lightning + W&B")
 
     # Data
+    parser.add_argument("--dataset", type=str, default="myzus",
+                        choices=["myzus", "inat"],
+                        help="Dataset to use: 'myzus' (default synthesis-program dataset) "
+                             "or 'inat' (iNaturalist 2021 mini)")
+    parser.add_argument("--train_cat", type=str, default="class",
+                        help="Taxonomy level for contrastive training labels (inat only). "
+                             "Options: kingdom, phylum, class, order, family, genus")
+    parser.add_argument("--test_cat", type=str, default="phylum",
+                        help="Taxonomy level for kNN evaluation labels (inat only). "
+                             "Options: kingdom, phylum, class, order, family, genus")
+    parser.add_argument("--inat_train_metadata", type=str, default="train_mini.json",
+                        help="Path to iNat2021 train metadata JSON")
+    parser.add_argument("--inat_val_metadata", type=str, default="val.json",
+                        help="Path to iNat2021 val metadata JSON")
+    parser.add_argument("--inat_train_dir", type=str, default="inat2021/train_mini",
+                        help="Directory containing iNat2021 training images")
+    parser.add_argument("--inat_val_dir", type=str, default="inat2021/val",
+                        help="Directory containing iNat2021 validation images")
     parser.add_argument("--data_dir", type=str, default=None,
                         help="Path to the image dataset (any nested folder layout). "
                              "Required for the VAE models; ignored for --model dino_lora, "
@@ -264,42 +282,60 @@ def main() -> None:
             print(f"[dino_lora] img_size must be a multiple of 14; using {args.img_size}")
         args.in_channels = 3
 
-        missing = [name for name, val in (
-            ("--contrastive_metadata", args.contrastive_metadata),
-            ("--contrastive_labels", args.contrastive_labels),
-            ("--contrastive_root_dir", args.contrastive_root_dir),
-        ) if not val]
-        if missing:
-            raise ValueError(
-                f"--model dino_lora requires {', '.join(missing)} to build the "
-                "synthesis-program-labelled contrastive dataset."
+        if args.dataset == "inat":
+            # iNaturalist 2021 dataset
+            datamodule = InatDataModule(
+                train_metadata=args.inat_train_metadata,
+                val_metadata=args.inat_val_metadata,
+                train_image_dir=args.inat_train_dir,
+                val_image_dir=args.inat_val_dir,
+                train_cat=args.train_cat,
+                test_cat=args.test_cat,
+                img_size=args.img_size,
+                batch_size=args.batch_size,
+                num_workers=args.num_workers,
+                classes_per_batch=args.contrastive_classes_per_batch,
+                samples_per_class=args.contrastive_samples_per_class,
+                seed=args.seed,
             )
+        else:
+            # Myzus (default) dataset
+            missing = [name for name, val in (
+                ("--contrastive_metadata", args.contrastive_metadata),
+                ("--contrastive_labels", args.contrastive_labels),
+                ("--contrastive_root_dir", args.contrastive_root_dir),
+            ) if not val]
+            if missing:
+                raise ValueError(
+                    f"--model dino_lora requires {', '.join(missing)} to build the "
+                    "synthesis-program-labelled contrastive dataset."
+                )
 
-        datamodule = ContrastiveDataModule(
-            image_metadata_json=args.contrastive_metadata,
-            label_metadata_csv=args.contrastive_labels,
-            root_dir=args.contrastive_root_dir,
-            img_size=args.img_size,
-            batch_size=args.batch_size,
-            num_workers=args.num_workers,
-            val_split=args.val_split,
-            compound_col=args.contrastive_compound_col,
-            label_col=args.contrastive_label_col,
-            min_compounds_per_class=args.contrastive_min_per_class,
-            filter_by_efficacy=args.contrastive_filter_efficacy,
-            use_control=args.contrastive_use_control,
-            classes_per_batch=args.contrastive_classes_per_batch,
-            samples_per_class=args.contrastive_samples_per_class,
-            compound_level=args.compound_level,
-            ssl_mode=args.ssl_lejepa,
-            ssl_views=args.ssl_views,
-            ssl_rotation=args.ssl_rotation,
-            ssl_translate=args.ssl_translate,
-            ssl_min_scale=args.ssl_min_scale,
-            ssl_gaussian_blur=args.ssl_gaussian_blur,
-            ssl_compound_views=args.ssl_compound_views,
-            seed=args.seed,
-        )
+            datamodule = ContrastiveDataModule(
+                image_metadata_json=args.contrastive_metadata,
+                label_metadata_csv=args.contrastive_labels,
+                root_dir=args.contrastive_root_dir,
+                img_size=args.img_size,
+                batch_size=args.batch_size,
+                num_workers=args.num_workers,
+                val_split=args.val_split,
+                compound_col=args.contrastive_compound_col,
+                label_col=args.contrastive_label_col,
+                min_compounds_per_class=args.contrastive_min_per_class,
+                filter_by_efficacy=args.contrastive_filter_efficacy,
+                use_control=args.contrastive_use_control,
+                classes_per_batch=args.contrastive_classes_per_batch,
+                samples_per_class=args.contrastive_samples_per_class,
+                compound_level=args.compound_level,
+                ssl_mode=args.ssl_lejepa,
+                ssl_views=args.ssl_views,
+                ssl_rotation=args.ssl_rotation,
+                ssl_translate=args.ssl_translate,
+                ssl_min_scale=args.ssl_min_scale,
+                ssl_gaussian_blur=args.ssl_gaussian_blur,
+                ssl_compound_views=args.ssl_compound_views,
+                seed=args.seed,
+            )
 
         model = DinoV2LoRA(
             backbone=args.dino_backbone,
@@ -392,6 +428,7 @@ def main() -> None:
         p_val = args.contrastive_classes_per_batch
         k_val = args.contrastive_samples_per_class
         level_tag = "_Comp" if args.compound_level else ""
+        dataset_tag = f"_inat_{args.train_cat}->{args.test_cat}" if args.dataset == "inat" else ""
         if args.ssl_lejepa:
             cv_tag = "_CompViews" if args.ssl_compound_views else ""
             aug_tag = (f"_Aug-R{args.ssl_rotation:.0f}T{args.ssl_translate}"
@@ -402,6 +439,7 @@ def main() -> None:
                 f"_{proj_tag}"
                 f"_LeJEPA_Views{args.ssl_views}_SW{args.sigreg_weight}"
                 f"{cv_tag}{aug_tag}"
+                f"{dataset_tag}"
             )
         else:
             sigreg_tag = f"_SIGReg{args.sigreg_weight}" if args.contrastive_sigreg_loss else ""
@@ -415,6 +453,7 @@ def main() -> None:
                 f"{level_tag}"
                 f"{sigreg_tag}"
                 f"{dcl_tag}"
+                f"{dataset_tag}"
             )
     else:
         ckpt_suffix = f"{args.model}-latent{args.latent_dim}-kld{args.kld_weight}"
@@ -456,6 +495,18 @@ def main() -> None:
             save_last=False,
         )
         callbacks.append(knn_checkpoint_callback)
+
+        if args.dataset == "inat":
+            # Additional checkpoint monitoring kNN on the test taxonomy level
+            test_knn_checkpoint_callback = ModelCheckpoint(
+                dirpath=ckpt_dir,
+                filename=args.model + "-best-test-knn-{epoch:02d}-{val_test_batch_knn_acc:.4f}",
+                monitor="val_test_batch_knn_acc",
+                mode="max",
+                save_top_k=1,
+                save_last=False,
+            )
+            callbacks.append(test_knn_checkpoint_callback)
 
     # Optional: chemical-class classifier callback (works for both the VAE
     # encoders and the DINOv2+LoRA embedding model).

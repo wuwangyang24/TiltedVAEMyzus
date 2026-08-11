@@ -53,22 +53,43 @@ class ContrastiveExperiment(pl.LightningModule):
         return self.model(x)
 
     def _step(self, batch: Any) -> Dict[str, torch.Tensor]:
-        images, labels = batch
+        # Support both (images, labels) and (images, train_labels, test_labels)
+        if len(batch) == 3:
+            images, labels, test_labels = batch
+        else:
+            images, labels = batch
+            test_labels = None
+
         if self.dcl_sigreg_loss:
             embeddings = self.model(images, normalize=True)
-            return self.model.dcl_sigreg_loss_function(
+            loss_dict = self.model.dcl_sigreg_loss_function(
                 embeddings, labels, temperature=self.temperature,
                 sigreg_weight=self.sigreg_weight,
                 sigreg_slices=self.sigreg_slices)
-        if self.contrastive_sigreg_loss:
+        elif self.contrastive_sigreg_loss:
             embeddings = self.model(images, normalize=False)
-            return self.model.contrastive_sigreg_loss_function(
+            loss_dict = self.model.contrastive_sigreg_loss_function(
                 embeddings, labels, temperature=self.temperature,
                 sigreg_weight=self.sigreg_weight,
                 sigreg_slices=self.sigreg_slices)
-        embeddings = self.model(images)
-        return self.model.loss_function(
-            embeddings, labels, temperature=self.temperature)
+        else:
+            embeddings = self.model(images)
+            loss_dict = self.model.loss_function(
+                embeddings, labels, temperature=self.temperature)
+
+        # Compute kNN accuracy on test_labels if available (iNat dataset)
+        if test_labels is not None:
+            with torch.no_grad():
+                normed = torch.nn.functional.normalize(embeddings, dim=1)
+                sim = normed @ normed.t()
+                self_mask = torch.eye(sim.size(0), device=sim.device)
+                test_knn = self.model._batch_knn_accuracy(
+                    sim, test_labels.view(-1, 1), self_mask)
+                loss_dict.update({
+                    f"test_{k}": v for k, v in test_knn.items()
+                })
+
+        return loss_dict
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         loss_dict = self._step(batch)

@@ -697,3 +697,225 @@ class ContrastiveDataModule(pl.LightningDataModule):
             drop_last=False,
             persistent_workers=self.num_workers > 0,
         )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# iNaturalist 2021 dataset support
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+class InatContrastiveDataset(Dataset):
+    """iNaturalist dataset returning (image, train_label, test_label).
+
+    ``train_label`` is used for contrastive loss and ``test_label`` is used for
+    kNN evaluation on a different taxonomy level.
+    """
+
+    def __init__(self, samples: List[Tuple[str, int, int]], transform: T.Compose) -> None:
+        self.samples = samples
+        self.transform = transform
+
+    def __len__(self) -> int:
+        return len(self.samples)
+
+    def __getitem__(self, index: int) -> Tuple[torch.Tensor, int, int]:
+        path, train_label, test_label = self.samples[index]
+        img = read_image(path, mode=ImageReadMode.RGB)
+        return self.transform(img), train_label, test_label
+
+
+class InatDataModule(pl.LightningDataModule):
+    """LightningDataModule for iNaturalist 2021 mini dataset.
+
+    Loads train/val metadata JSONs (COCO-style with ``images``, ``annotations``,
+    ``categories``), assigns contrastive labels from ``train_cat`` taxonomy level,
+    and evaluation labels from ``test_cat`` taxonomy level.
+
+    Args:
+        train_metadata: path to train_mini.json
+        val_metadata: path to val.json
+        train_image_dir: path to training images (e.g. inat2021/train_mini)
+        val_image_dir: path to val images (e.g. inat2021/val)
+        train_cat: taxonomy column for contrastive training (e.g. 'class')
+        test_cat: taxonomy column for kNN evaluation (e.g. 'phylum')
+        img_size: square image size
+        batch_size: mini-batch size
+        num_workers: DataLoader workers
+        classes_per_batch: P for P x K sampling (0 disables)
+        samples_per_class: K for P x K sampling
+        seed: RNG seed
+    """
+
+    def __init__(self,
+                 train_metadata: str,
+                 val_metadata: str,
+                 train_image_dir: str,
+                 val_image_dir: str,
+                 train_cat: str = "class",
+                 test_cat: str = "phylum",
+                 img_size: int = 224,
+                 batch_size: int = 64,
+                 num_workers: int = 4,
+                 classes_per_batch: int = 0,
+                 samples_per_class: int = 0,
+                 seed: int = 42) -> None:
+        super().__init__()
+        self.train_metadata = train_metadata
+        self.val_metadata = val_metadata
+        self.train_image_dir = train_image_dir
+        self.val_image_dir = val_image_dir
+        self.train_cat = train_cat
+        self.test_cat = test_cat
+        self.img_size = img_size
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+        self.classes_per_batch = classes_per_batch
+        self.samples_per_class = samples_per_class
+        self.seed = seed
+
+        self.train_classes: List[str] = []
+        self.test_classes: List[str] = []
+        self._train_labels: List[int] = []
+        self.train_dataset: Optional[Dataset] = None
+        self.val_dataset: Optional[Dataset] = None
+
+    @property
+    def num_train_classes(self) -> int:
+        return len(self.train_classes)
+
+    @property
+    def num_test_classes(self) -> int:
+        return len(self.test_classes)
+
+    @property
+    def use_pk_sampler(self) -> bool:
+        return self.classes_per_batch > 0 and self.samples_per_class > 0
+
+    def _build_transform(self) -> T.Compose:
+        return T.Compose([
+            T.Resize((self.img_size, self.img_size), antialias=True),
+            T.ConvertImageDtype(torch.float32),
+            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+        ])
+
+    @staticmethod
+    def _parse_inat_json(metadata_path: str, image_dir: str,
+                         train_cat: str, test_cat: str
+                         ) -> List[Tuple[str, str, str]]:
+        """Parse iNat2021 COCO-style JSON, return (path, train_cat_value, test_cat_value)."""
+        with open(metadata_path) as f:
+            data = json.load(f)
+
+        # Build category_id -> taxonomy mapping
+        cat_map: Dict[int, Dict[str, str]] = {}
+        for cat in data["categories"]:
+            cat_map[cat["id"]] = cat
+
+        # Build image_id -> file_name mapping
+        img_map: Dict[int, str] = {}
+        for img in data["images"]:
+            img_map[img["id"]] = img["file_name"]
+
+        samples = []
+        for ann in data["annotations"]:
+            img_id = ann["image_id"]
+            cat_id = ann["category_id"]
+            if img_id not in img_map or cat_id not in cat_map:
+                continue
+            cat_info = cat_map[cat_id]
+            train_val = cat_info.get(train_cat)
+            test_val = cat_info.get(test_cat)
+            if train_val is None or test_val is None:
+                continue
+            file_name = img_map[img_id]
+            full_path = os.path.join(image_dir, file_name)
+            samples.append((full_path, str(train_val), str(test_val)))
+
+        return samples
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        train_raw = self._parse_inat_json(
+            self.train_metadata, self.train_image_dir,
+            self.train_cat, self.test_cat)
+        val_raw = self._parse_inat_json(
+            self.val_metadata, self.val_image_dir,
+            self.train_cat, self.test_cat)
+
+        # Build unified label encodings across both splits
+        all_train_cats = sorted(set(s[1] for s in train_raw + val_raw))
+        all_test_cats = sorted(set(s[2] for s in train_raw + val_raw))
+        self.train_classes = all_train_cats
+        self.test_classes = all_test_cats
+        train_cat2idx = {c: i for i, c in enumerate(all_train_cats)}
+        test_cat2idx = {c: i for i, c in enumerate(all_test_cats)}
+
+        train_samples = [(p, train_cat2idx[tc], test_cat2idx[ec])
+                         for p, tc, ec in train_raw]
+        val_samples = [(p, train_cat2idx[tc], test_cat2idx[ec])
+                       for p, tc, ec in val_raw]
+
+        rng = np.random.default_rng(self.seed)
+        rng.shuffle(val_samples)
+
+        self._train_labels = [s[1] for s in train_samples]
+
+        transform = self._build_transform()
+        self.train_dataset = InatContrastiveDataset(train_samples, transform)
+        self.val_dataset = InatContrastiveDataset(val_samples, transform)
+
+        print(
+            f"[InatDataModule] train={len(train_samples)}, val={len(val_samples)}, "
+            f"train_cat='{self.train_cat}' ({self.num_train_classes} classes), "
+            f"test_cat='{self.test_cat}' ({self.num_test_classes} classes)",
+            flush=True,
+        )
+
+    def train_dataloader(self) -> DataLoader:
+        if self.use_pk_sampler:
+            batch_sampler = PKBatchSampler(
+                labels=self._train_labels,
+                classes_per_batch=self.classes_per_batch,
+                samples_per_class=self.samples_per_class,
+                seed=self.seed,
+            )
+            return DataLoader(
+                self.train_dataset,
+                batch_sampler=batch_sampler,
+                num_workers=self.num_workers,
+                pin_memory=True,
+                persistent_workers=self.num_workers > 0,
+            )
+        return DataLoader(
+            self.train_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            drop_last=True,
+            persistent_workers=self.num_workers > 0,
+        )
+
+    def val_dataloader(self) -> DataLoader:
+        if self.use_pk_sampler:
+            batch_sampler = PKBatchSampler(
+                labels=self._train_labels,
+                classes_per_batch=self.classes_per_batch,
+                samples_per_class=self.samples_per_class,
+                seed=self.seed,
+            )
+            return DataLoader(
+                self.val_dataset,
+                batch_sampler=batch_sampler,
+                num_workers=self.num_workers,
+                pin_memory=True,
+                persistent_workers=self.num_workers > 0,
+            )
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            drop_last=False,
+            persistent_workers=self.num_workers > 0,
+        )
