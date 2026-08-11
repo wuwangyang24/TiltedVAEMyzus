@@ -31,6 +31,7 @@ class ContrastiveExperiment(pl.LightningModule):
                  warmup_epochs: int = 0,
                  max_epochs: int = 100,
                  contrastive_sigreg_loss: bool = False,
+                 dcl_sigreg_loss: bool = False,
                  sigreg_weight: float = 0.1,
                  sigreg_slices: int = 512) -> None:
         super().__init__()
@@ -43,6 +44,7 @@ class ContrastiveExperiment(pl.LightningModule):
         self.warmup_epochs = warmup_epochs
         self.max_epochs = max_epochs
         self.contrastive_sigreg_loss = contrastive_sigreg_loss
+        self.dcl_sigreg_loss = dcl_sigreg_loss
         self.sigreg_weight = sigreg_weight
         self.sigreg_slices = sigreg_slices
         self.save_hyperparameters(ignore=["model"])
@@ -52,6 +54,12 @@ class ContrastiveExperiment(pl.LightningModule):
 
     def _step(self, batch: Any) -> Dict[str, torch.Tensor]:
         images, labels = batch
+        if self.dcl_sigreg_loss:
+            embeddings = self.model(images, normalize=True)
+            return self.model.dcl_sigreg_loss_function(
+                embeddings, labels, temperature=self.temperature,
+                sigreg_weight=self.sigreg_weight,
+                sigreg_slices=self.sigreg_slices)
         if self.contrastive_sigreg_loss:
             embeddings = self.model(images, normalize=False)
             return self.model.contrastive_sigreg_loss_function(

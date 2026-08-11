@@ -113,6 +113,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--contrastive_sigreg_loss", action="store_true",
                         help="Replace negatives in the contrastive loss with SIGReg "
                              "regularization for collapse prevention.")
+    parser.add_argument("--dcl_sigreg_loss", action="store_true",
+                        help="Use Decoupled Contrastive Loss with SIGReg: "
+                             "loss = pos + lambda*neg + (1-lambda)*SIGReg.")
 
     # LeJEPA self-supervised training (only used when --model dino_lora)
     parser.add_argument("--ssl_lejepa", action="store_true",
@@ -335,6 +338,7 @@ def main() -> None:
                 warmup_epochs=args.warmup_epochs,
                 max_epochs=args.epochs,
                 contrastive_sigreg_loss=args.contrastive_sigreg_loss,
+                dcl_sigreg_loss=args.dcl_sigreg_loss,
                 sigreg_weight=args.sigreg_weight,
                 sigreg_slices=args.sigreg_slices,
             )
@@ -413,6 +417,7 @@ def main() -> None:
             )
         else:
             sigreg_tag = f"_SIGReg{args.sigreg_weight}" if args.contrastive_sigreg_loss else ""
+            dcl_tag = f"_DCL-SIGReg{args.sigreg_weight}" if args.dcl_sigreg_loss else ""
             ckpt_suffix = (
                 f"DINO_LoRA_{targets_tag}"
                 f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
@@ -421,6 +426,7 @@ def main() -> None:
                 f"_T{args.temperature}"
                 f"{level_tag}"
                 f"{sigreg_tag}"
+                f"{dcl_tag}"
             )
     else:
         ckpt_suffix = f"{args.model}-latent{args.latent_dim}-kld{args.kld_weight}"
