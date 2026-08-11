@@ -60,5 +60,8 @@ Thumbs.db
 # Logs
 *.log
 
+# JSON data files
+*.json
+
 # SIMPL / Imagery Analytics deployment folder
 simpl/
