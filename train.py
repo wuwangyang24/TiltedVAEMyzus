@@ -145,6 +145,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dcl_suspicion_bias", type=float, default=0.5,
                         help="Similarity threshold (bias) of the DCL-SIGReg suspicion "
                              "sigmoid. Default: 0.5")
+    parser.add_argument("--normal_dcl", action="store_true",
+                        help="With --dcl_sigreg_loss, use plain DCL+SIGReg: all "
+                             "negatives weighted equally (no suspicion memory bank) "
+                             "and SIGReg applied to the batch embeddings.")
 
     # LeJEPA self-supervised training (only used when --model dino_lora)
     parser.add_argument("--ssl_lejepa", action="store_true",
@@ -333,6 +337,7 @@ def main() -> None:
             dcl_ema_momentum=args.dcl_ema_momentum,
             dcl_suspicion_tau=args.dcl_suspicion_tau,
             dcl_suspicion_bias=args.dcl_suspicion_bias,
+            dcl_normal=args.normal_dcl,
         )
 
         if args.ssl_lejepa:
@@ -428,7 +433,8 @@ def main() -> None:
             )
         else:
             sigreg_tag = f"_SIGReg{args.sigreg_weight}" if args.contrastive_sigreg_loss else ""
-            dcl_tag = f"_DCL-SIGReg{args.sigreg_weight}" if args.dcl_sigreg_loss else ""
+            dcl_variant = "-Normal" if args.normal_dcl else ""
+            dcl_tag = f"_DCL{dcl_variant}-SIGReg{args.sigreg_weight}" if args.dcl_sigreg_loss else ""
             ckpt_suffix = (
                 f"DINO_LoRA_{targets_tag}"
                 f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"

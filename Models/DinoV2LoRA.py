@@ -119,6 +119,7 @@ class DinoV2LoRA(nn.Module):
                  dcl_ema_momentum: float = 0.9,
                  dcl_suspicion_tau: float = 0.1,
                  dcl_suspicion_bias: float = 0.5,
+                 dcl_normal: bool = False,
                  pretrained: bool = True) -> None:
         super().__init__()
 
@@ -174,6 +175,7 @@ class DinoV2LoRA(nn.Module):
             ema_momentum=dcl_ema_momentum,
             suspicion_tau=dcl_suspicion_tau,
             suspicion_bias=dcl_suspicion_bias,
+            normal_dcl=dcl_normal,
         )
 
     def trainable_parameters(self) -> List[nn.Parameter]:

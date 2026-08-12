@@ -44,11 +44,16 @@ class DCLSIGRegLoss(nn.Module):
 
     def __init__(self, ema_momentum: float = 0.9,
                  suspicion_tau: float = 0.1,
-                 suspicion_bias: float = 0.5) -> None:
+                 suspicion_bias: float = 0.5,
+                 normal_dcl: bool = False) -> None:
         super().__init__()
         self.ema_momentum = ema_momentum
         self.suspicion_tau = suspicion_tau
         self.suspicion_bias = suspicion_bias
+        # When True, fall back to plain DCL+SIGReg: every negative is weighted
+        # equally (no suspicion memory bank) and SIGReg acts on the batch
+        # embeddings directly.
+        self.normal_dcl = normal_dcl
         # Lazily-sized memory-bank buffers (allocated on first forward).
         self.register_buffer("class_means", torch.empty(0), persistent=True)
         self.register_buffer("initialized", torch.empty(0, dtype=torch.bool),
@@ -128,34 +133,43 @@ class DCLSIGRegLoss(nn.Module):
         else:
             pos_loss = torch.zeros((), device=device, requires_grad=True)
 
-        # Suspicion weights from the detached memory-bank means (pre-update).
-        # Close class means -> high p_ij -> small (1 - p_ij) weight on that pair.
-        with torch.no_grad():
-            bank_normed = F.normalize(self.class_means, dim=1)
-            sample_means = bank_normed[labels_flat]         # (N, D)
-            mean_sim = sample_means @ sample_means.t()      # (N, N)
-            p = torch.sigmoid((mean_sim - self.suspicion_bias) / self.suspicion_tau)
-            neg_weight = (1.0 - p).clamp(min=1e-6)
-
-        # Weighted decoupled negative term: log( sum_j w_ij * exp(sim_ij) ).
-        log_w = torch.log(neg_weight)
         non_neg_mask = pos_mask + self_mask                 # mask out positives and self
-        neg_logits = sim + log_w + non_neg_mask * _SMALL_NUM
-        neg_loss = torch.logsumexp(neg_logits, dim=1).mean()
 
-        # SIGReg over a pool of class means: live batch means (gradient) for the
-        # classes in this batch, plus the last stored EMA means (detached) for
-        # the bank classes absent from the batch.
-        absent_mask = self.initialized & (~present_mask)
-        pool = [class_means_batch[present_mask]]
-        if absent_mask.any():
-            pool.append(self.class_means[absent_mask].detach())
-        pool_means = torch.cat(pool, dim=0)
-        if pool_means.size(0) >= 2:
+        if self.normal_dcl:
+            # Plain DCL: every negative weighted equally; SIGReg on the batch
+            # embeddings directly (no suspicion memory bank).
+            neg_logits = sim + non_neg_mask * _SMALL_NUM
+            neg_loss = torch.logsumexp(neg_logits, dim=1).mean()
             sr_loss = sigreg_loss(
-                pool_means, sigreg_slices, sigreg_num_freqs, sigreg_t_max)
+                embeddings, sigreg_slices, sigreg_num_freqs, sigreg_t_max)
         else:
-            sr_loss = torch.zeros((), device=device)
+            # Suspicion weights from the detached memory-bank means (pre-update).
+            # Close class means -> high p_ij -> small (1 - p_ij) weight on that pair.
+            with torch.no_grad():
+                bank_normed = F.normalize(self.class_means, dim=1)
+                sample_means = bank_normed[labels_flat]         # (N, D)
+                mean_sim = sample_means @ sample_means.t()      # (N, N)
+                p = torch.sigmoid((mean_sim - self.suspicion_bias) / self.suspicion_tau)
+                neg_weight = (1.0 - p).clamp(min=1e-6)
+
+            # Weighted decoupled negative term: log( sum_j w_ij * exp(sim_ij) ).
+            log_w = torch.log(neg_weight)
+            neg_logits = sim + log_w + non_neg_mask * _SMALL_NUM
+            neg_loss = torch.logsumexp(neg_logits, dim=1).mean()
+
+            # SIGReg over a pool of class means: live batch means (gradient) for
+            # the classes in this batch, plus the last stored EMA means
+            # (detached) for the bank classes absent from the batch.
+            absent_mask = self.initialized & (~present_mask)
+            pool = [class_means_batch[present_mask]]
+            if absent_mask.any():
+                pool.append(self.class_means[absent_mask].detach())
+            pool_means = torch.cat(pool, dim=0)
+            if pool_means.size(0) >= 2:
+                sr_loss = sigreg_loss(
+                    pool_means, sigreg_slices, sigreg_num_freqs, sigreg_t_max)
+            else:
+                sr_loss = torch.zeros((), device=device)
 
         lam = sigreg_weight
         loss = pos_loss + neg_loss + lam * sr_loss
@@ -166,26 +180,30 @@ class DCLSIGRegLoss(nn.Module):
                 "pos_loss": pos_loss.detach(),
                 "neg_loss": neg_loss.detach(),
                 "sigreg_loss": sr_loss.detach(),
-                "suspicion_mean": (p * neg_mask).sum() / neg_mask.sum().clamp(min=1),
                 "pos_fraction": valid.float().mean(),
                 "emb_std": embeddings.std(dim=0).mean(),
                 **gaussianity_metrics(embeddings),
                 **knn_accs,
             }
 
-            # Break down suspicion over negatives by --test_cat relationship:
-            # negatives sharing a test_cat are the likely false negatives.
-            if test_labels is not None:
-                tl = test_labels.view(-1, 1)
-                same_test = torch.eq(tl, tl.t()).float()
-                same_test_neg = neg_mask * same_test
-                diff_test_neg = neg_mask * (1.0 - same_test)
-                metrics["suspicion_same_testcat"] = (
-                    (p * same_test_neg).sum() / same_test_neg.sum().clamp(min=1))
-                metrics["suspicion_diff_testcat"] = (
-                    (p * diff_test_neg).sum() / diff_test_neg.sum().clamp(min=1))
+            # Suspicion diagnostics (only when the memory bank is active).
+            if not self.normal_dcl:
+                metrics["suspicion_mean"] = (
+                    (p * neg_mask).sum() / neg_mask.sum().clamp(min=1))
+                # Break down suspicion over negatives by --test_cat relationship:
+                # negatives sharing a test_cat are the likely false negatives.
+                if test_labels is not None:
+                    tl = test_labels.view(-1, 1)
+                    same_test = torch.eq(tl, tl.t()).float()
+                    same_test_neg = neg_mask * same_test
+                    diff_test_neg = neg_mask * (1.0 - same_test)
+                    metrics["suspicion_same_testcat"] = (
+                        (p * same_test_neg).sum() / same_test_neg.sum().clamp(min=1))
+                    metrics["suspicion_diff_testcat"] = (
+                        (p * diff_test_neg).sum() / diff_test_neg.sum().clamp(min=1))
 
         # Update the EMA bank for this batch's classes (detached for storage).
-        self._update_memory(class_means_batch.detach(), present_mask)
+        if not self.normal_dcl:
+            self._update_memory(class_means_batch.detach(), present_mask)
 
         return {"loss": loss, **metrics}
