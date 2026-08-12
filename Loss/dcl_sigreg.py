@@ -94,7 +94,13 @@ class DCLSIGRegLoss(nn.Module):
 
         self._ensure_capacity(num_classes, d, device, embeddings.dtype)
 
-        # Per-class batch means (gradient-carrying) via one-hot scatter.
+        # SIGReg and the class-mean bank operate in the raw (un-normalized)
+        # Euclidean space, where the isotropic-Gaussian target is well defined;
+        # the contrastive/suspicion terms use the L2-normalized (cosine) space.
+        normed = F.normalize(embeddings, dim=1)
+
+        # Per-class batch means (gradient-carrying) via one-hot scatter, in the
+        # raw embedding space for SIGReg / bank storage.
         onehot = F.one_hot(labels_flat, self.class_means.size(0)).to(embeddings.dtype)
         counts = onehot.sum(0)                              # (C,)
         sums = onehot.t() @ embeddings                      # (C, D)
@@ -111,8 +117,8 @@ class DCLSIGRegLoss(nn.Module):
         pos_per_anchor = pos_mask.sum(dim=1)
         valid = pos_per_anchor > 0
 
-        # Cosine similarity (embeddings are L2-normalized).
-        sim = embeddings @ embeddings.t() / temperature
+        # Cosine similarity on the L2-normalized embeddings.
+        sim = normed @ normed.t() / temperature
 
         # Positive term: mean similarity to same-label samples.
         pos_sim = (pos_mask * sim).sum(dim=1) / pos_per_anchor.clamp(min=1)
