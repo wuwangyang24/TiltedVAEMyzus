@@ -151,7 +151,7 @@ def parse_args() -> argparse.Namespace:
                              "saturation; --dcl_suspicion_bias is then in std units, "
                              "try ~0 with --dcl_suspicion_tau ~1).")
     parser.add_argument("--normal_dcl", action="store_true",
-                        help="With --dcl_sigreg_loss, use plain DCL+SIGReg: all "
+                        help="With--dcl_sigreg_loss, use plain DCL+SIGReg: all "
                              "negatives weighted equally (no suspicion memory bank) "
                              "and SIGReg applied to the batch embeddings.")
 
