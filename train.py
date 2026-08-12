@@ -10,7 +10,6 @@ from Models import VAE, TiltedVAE, DinoV2LoRA
 from dataset import VAEDataModule, ContrastiveDataModule, InatDataModule
 from experiment import VAEExperiment
 from contrastive_experiment import ContrastiveExperiment, LeJEPAExperiment
-from Tests.chemical_class_classifier.classifier_callback import ChemicalClassClassifierCallback
 
 # Use file-system based tensor sharing to avoid /dev/shm exhaustion, which
 # otherwise hangs DataLoader workers in containers with a small shared-memory
@@ -209,36 +208,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tags", type=str, nargs="*", default=None,
                         help="Optional W&B run tags, space separated")
     parser.add_argument("--output_dir", type=str, default="results")
-
-    # Chemical-class classifier callback
-    parser.add_argument("--cls_image_metadata", type=str, default=None,
-                        help="JSON metadata file for the classifier callback "
-                             "(compounds -> plates -> image paths). If not set, "
-                             "the classifier callback is disabled.")
-    parser.add_argument("--cls_label_metadata", type=str, default=None,
-                        help="CSV/Excel with compound labels for the classifier callback")
-    parser.add_argument("--cls_root_dir", type=str, default=None,
-                        help="Root directory prepended to image paths in the JSON metadata")
-    parser.add_argument("--cls_every_n_epochs", type=int, default=5,
-                        help="Run the classifier test every N validation epochs. Default: 5")
-    parser.add_argument("--cls_compound_col", type=str, default="compound",
-                        help="Compound ID column in the label CSV. Default: compound")
-    parser.add_argument("--cls_label_col", type=str, default="synthesis_program",
-                        help="Class label column in the label CSV. Default: synthesis_program")
-    parser.add_argument("--cls_subtract_control", action="store_true",
-                        help="Subtract per-plate control embedding before classification")
-    parser.add_argument("--cls_normalize_before_subtract", action="store_true",
-                        help="L2-normalize embeddings before control subtraction (requires --cls_subtract_control)")
-    parser.add_argument("--cls_normalize_after_subtract", action="store_true",
-                        help="L2-normalize embeddings after control subtraction (requires --cls_subtract_control)")
-    parser.add_argument("--cls_filter_by_efficacy", type=float, default=0,
-                        help="Keep only compounds with Efficacy >= this value")
-    parser.add_argument("--cls_min_compounds_per_class", type=int, default=30,
-                        help="Drop classes with fewer compounds. Default: 30")
-    parser.add_argument("--cls_cb_iterations", type=int, default=300,
-                        help="CatBoost iterations for the callback classifier. Default: 300")
-    parser.add_argument("--disable_cls_callback", action="store_true",
-                        help="Disable periodic chemical-class classifier evaluation during training")
 
     return parser.parse_args()
 
@@ -507,35 +476,6 @@ def main() -> None:
                 save_last=False,
             )
             callbacks.append(test_knn_checkpoint_callback)
-
-    # Optional: chemical-class classifier callback (works for both the VAE
-    # encoders and the DINOv2+LoRA embedding model).
-    if (args.cls_image_metadata and args.cls_label_metadata
-            and args.cls_root_dir):
-        cls_callback = ChemicalClassClassifierCallback(
-            image_metadata_json=args.cls_image_metadata,
-            label_metadata_csv=args.cls_label_metadata,
-            root_dir=args.cls_root_dir,
-            eval_every_n_epochs=args.cls_every_n_epochs,
-            compound_col=args.cls_compound_col,
-            label_col=args.cls_label_col,
-            subtract_control=args.cls_subtract_control,
-            normalize_before_subtract=args.cls_normalize_before_subtract,
-            normalize_after_subtract=args.cls_normalize_after_subtract,
-            filter_by_efficacy=args.cls_filter_by_efficacy,
-            min_compounds_per_class=args.cls_min_compounds_per_class,
-            img_size=args.img_size,
-            in_channels=args.in_channels,
-            batch_size=args.batch_size,
-            cb_iterations=args.cls_cb_iterations,
-            seed=args.seed,
-            output_dir=args.output_dir,
-            ckpt_subdir=ckpt_suffix,
-            normalize_imagenet=is_dino,
-        )
-        if not args.disable_cls_callback:
-            callbacks.append(cls_callback)
-            print(f"[ClassifierCallback] Enabled — evaluating every {args.cls_every_n_epochs} epochs")
 
     # Trainer
     # Parse --devices: "auto" stays as-is; comma-separated digits become a
