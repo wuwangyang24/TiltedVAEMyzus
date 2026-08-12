@@ -7,7 +7,7 @@ from torch import Tensor
 from torch.nn import functional as F
 
 from Loss import (
-    infonce_loss, contrastive_sigreg_loss, dcl_sigreg_loss, lejepa_loss,
+    infonce_loss, contrastive_sigreg_loss, DCLSIGRegLoss, lejepa_loss,
     sigreg_loss, batch_knn_accuracy, gaussianity_metrics,
 )
 
@@ -166,6 +166,9 @@ class DinoV2LoRA(nn.Module):
         else:
             self.projection = None
 
+        # Stateful DCL+SIGReg loss with its EMA class-mean memory bank.
+        self.dcl_sigreg_loss = DCLSIGRegLoss()
+
     def trainable_parameters(self) -> List[nn.Parameter]:
         """Return only the trainable (LoRA + projection head) parameters."""
         return [p for p in self.parameters() if p.requires_grad]
@@ -198,7 +201,7 @@ class DinoV2LoRA(nn.Module):
     def dcl_sigreg_loss_function(
         self, embeddings: Tensor, labels: Tensor, **kwargs,
     ) -> Dict[str, Tensor]:
-        return dcl_sigreg_loss(embeddings, labels, **kwargs)
+        return self.dcl_sigreg_loss(embeddings, labels, **kwargs)
 
     def lejepa_loss_function(self, view_embeddings: Tensor,
                              **kwargs) -> Dict[str, Tensor]:
