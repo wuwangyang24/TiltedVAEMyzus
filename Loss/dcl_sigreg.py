@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Optional
 
 import numpy as np
 import torch
@@ -85,6 +85,7 @@ class DCLSIGRegLoss(nn.Module):
                 sigreg_slices: int = 512,
                 sigreg_num_freqs: int = 33,
                 sigreg_t_max: float = 8.0,
+                test_labels: Optional[Tensor] = None,
                 **kwargs) -> Dict[str, Tensor]:
         temperature = kwargs.get("temperature", temperature)
         device = embeddings.device
@@ -171,6 +172,18 @@ class DCLSIGRegLoss(nn.Module):
                 **gaussianity_metrics(embeddings),
                 **knn_accs,
             }
+
+            # Break down suspicion over negatives by --test_cat relationship:
+            # negatives sharing a test_cat are the likely false negatives.
+            if test_labels is not None:
+                tl = test_labels.view(-1, 1)
+                same_test = torch.eq(tl, tl.t()).float()
+                same_test_neg = neg_mask * same_test
+                diff_test_neg = neg_mask * (1.0 - same_test)
+                metrics["suspicion_same_testcat"] = (
+                    (p * same_test_neg).sum() / same_test_neg.sum().clamp(min=1))
+                metrics["suspicion_diff_testcat"] = (
+                    (p * diff_test_neg).sum() / diff_test_neg.sum().clamp(min=1))
 
         # Update the EMA bank for this batch's classes (detached for storage).
         self._update_memory(class_means_batch.detach(), present_mask)

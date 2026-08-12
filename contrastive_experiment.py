@@ -65,7 +65,8 @@ class ContrastiveExperiment(pl.LightningModule):
             loss_dict = self.model.dcl_sigreg_loss_function(
                 embeddings, labels, temperature=self.temperature,
                 sigreg_weight=self.sigreg_weight,
-                sigreg_slices=self.sigreg_slices)
+                sigreg_slices=self.sigreg_slices,
+                test_labels=test_labels)
         elif self.contrastive_sigreg_loss:
             embeddings = self.model(images, normalize=False)
             loss_dict = self.model.contrastive_sigreg_loss_function(
