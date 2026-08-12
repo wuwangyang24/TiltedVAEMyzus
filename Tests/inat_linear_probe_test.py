@@ -196,6 +196,8 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Linear probing test on iNat val embeddings")
 
     p.add_argument("--checkpoint", required=True, help="Model checkpoint (.ckpt)")
+    p.add_argument("--train_metadata", required=True, help="iNat2021 train metadata JSON")
+    p.add_argument("--train_image_dir", required=True, help="Image directory for train set")
     p.add_argument("--val_metadata", required=True, help="iNat2021 val metadata JSON")
     p.add_argument("--val_image_dir", required=True, help="Image directory for val set")
     p.add_argument("--test_cat", required=True,
@@ -215,8 +217,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--use_proj_head", action="store_true")
 
     # Probe settings
-    p.add_argument("--train_fraction", type=float, default=0.8,
-                   help="Fraction of val set used to train the linear probe")
     p.add_argument("--probe_lr", type=float, default=0.1)
     p.add_argument("--probe_epochs", type=int, default=100,
                    help="LBFGS iterations for the linear probe")
@@ -233,20 +233,22 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
-    rng = np.random.default_rng(args.seed)
 
-    # Parse metadata
-    raw_samples, classes = parse_inat_json(
+    # Parse train and val metadata
+    train_raw, train_classes = parse_inat_json(
+        args.train_metadata, args.train_image_dir, args.test_cat, args.superclass)
+    val_raw, val_classes = parse_inat_json(
         args.val_metadata, args.val_image_dir, args.test_cat, args.superclass)
-    class2idx = {c: i for i, c in enumerate(classes)}
-    num_classes = len(classes)
-    samples = [(path, class2idx[label]) for path, label in raw_samples]
-    print(f"Val set: {len(samples)} images, {num_classes} {args.test_cat} classes")
 
-    # Shuffle and split
-    indices = rng.permutation(len(samples))
-    split = int(len(samples) * args.train_fraction)
-    train_idx, test_idx = indices[:split], indices[split:]
+    # Unified label encoding across both splits
+    all_classes = sorted(set(train_classes + val_classes))
+    class2idx = {c: i for i, c in enumerate(all_classes)}
+    num_classes = len(all_classes)
+
+    train_samples = [(path, class2idx[label]) for path, label in train_raw]
+    val_samples = [(path, class2idx[label]) for path, label in val_raw]
+    print(f"Train set: {len(train_samples)} images, {num_classes} {args.test_cat} classes")
+    print(f"Val set:   {len(val_samples)} images")
 
     transform = T.Compose([
         T.Resize((args.img_size, args.img_size), antialias=True),
@@ -254,19 +256,19 @@ def main() -> None:
         T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
     ])
 
-    full_dataset = InatValDataset(samples, transform)
+    train_dataset = InatValDataset(train_samples, transform)
+    val_dataset = InatValDataset(val_samples, transform)
 
-    # Load model and encode
+    # Load model and encode both splits
     model = load_model(args).to(device).eval()
+    print("Encoding train set...")
+    train_embs, train_labels = encode_dataset(model, train_dataset, args.batch_size,
+                                              device, args.num_workers)
     print("Encoding val set...")
-    embeddings, labels = encode_dataset(model, full_dataset, args.batch_size,
-                                        device, args.num_workers)
+    test_embs, test_labels = encode_dataset(model, val_dataset, args.batch_size,
+                                            device, args.num_workers)
     del model
     torch.cuda.empty_cache()
-
-    train_embs, train_labels = embeddings[train_idx], labels[train_idx]
-    test_embs, test_labels = embeddings[test_idx], labels[test_idx]
-    print(f"Probe split: train={len(train_idx)}, test={len(test_idx)}")
 
     # Linear probe
     print("Training linear probe...")
@@ -278,7 +280,7 @@ def main() -> None:
 
     print(f"\n{'=' * 50}")
     print(f"Linear probe results (test_cat={args.test_cat}, "
-          f"{num_classes} classes):")
+          f"{num_classes} classes, train={len(train_samples)}, val={len(val_samples)}):")
     print(f"  Top-1 accuracy: {results['top1_acc']:.4f}")
     print(f"  Top-5 accuracy: {results['top5_acc']:.4f}")
 
