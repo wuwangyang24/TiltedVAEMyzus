@@ -218,6 +218,8 @@ def parse_args() -> argparse.Namespace:
                         help="Lightning precision (e.g. 16-mixed, bf16-mixed, 32-true)")
     parser.add_argument("--deterministic", action="store_true",
                         help="Force deterministic algorithms (reproducible but slower)")
+    parser.add_argument("--val_every_n_epochs", type=int, default=1,
+                        help="Run validation every N training epochs (default: 1)")
     parser.add_argument("--seed", type=int, default=42)
 
     # Logging / checkpoints
@@ -529,6 +531,7 @@ def main() -> None:
         logger=wandb_logger,
         callbacks=callbacks,
         log_every_n_steps=10,
+        check_val_every_n_epoch=args.val_every_n_epochs,
         deterministic=args.deterministic,
     )
 
