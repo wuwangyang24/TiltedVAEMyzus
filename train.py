@@ -136,6 +136,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dcl_sigreg_loss", action="store_true",
                         help="Use Decoupled Contrastive Loss with SIGReg: "
                              "loss = pos + lambda*neg + (1-lambda)*SIGReg.")
+    parser.add_argument("--dcl_ema_momentum", type=float, default=0.9,
+                        help="EMA momentum for the DCL-SIGReg class-mean memory bank. "
+                             "Default: 0.9")
+    parser.add_argument("--dcl_suspicion_tau", type=float, default=0.1,
+                        help="Temperature of the DCL-SIGReg suspicion sigmoid. "
+                             "Default: 0.1")
+    parser.add_argument("--dcl_suspicion_bias", type=float, default=0.5,
+                        help="Similarity threshold (bias) of the DCL-SIGReg suspicion "
+                             "sigmoid. Default: 0.5")
 
     # LeJEPA self-supervised training (only used when --model dino_lora)
     parser.add_argument("--ssl_lejepa", action="store_true",
@@ -321,6 +330,9 @@ def main() -> None:
             lora_targets=args.lora_targets,
             temperature=args.temperature,
             use_proj_head=args.use_proj_head,
+            dcl_ema_momentum=args.dcl_ema_momentum,
+            dcl_suspicion_tau=args.dcl_suspicion_tau,
+            dcl_suspicion_bias=args.dcl_suspicion_bias,
         )
 
         if args.ssl_lejepa:

@@ -116,6 +116,9 @@ class DinoV2LoRA(nn.Module):
                  lora_targets: Optional[List[str]] = None,
                  temperature: float = 0.1,
                  use_proj_head: bool = True,
+                 dcl_ema_momentum: float = 0.9,
+                 dcl_suspicion_tau: float = 0.1,
+                 dcl_suspicion_bias: float = 0.5,
                  pretrained: bool = True) -> None:
         super().__init__()
 
@@ -167,7 +170,11 @@ class DinoV2LoRA(nn.Module):
             self.projection = None
 
         # Stateful DCL+SIGReg loss with its EMA class-mean memory bank.
-        self.dcl_sigreg_loss = DCLSIGRegLoss()
+        self.dcl_sigreg_loss = DCLSIGRegLoss(
+            ema_momentum=dcl_ema_momentum,
+            suspicion_tau=dcl_suspicion_tau,
+            suspicion_bias=dcl_suspicion_bias,
+        )
 
     def trainable_parameters(self) -> List[nn.Parameter]:
         """Return only the trainable (LoRA + projection head) parameters."""
