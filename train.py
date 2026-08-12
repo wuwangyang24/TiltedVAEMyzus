@@ -446,7 +446,7 @@ def main() -> None:
             dcl_variant = "-Normal" if args.normal_dcl else ""
             if args.dcl_sigreg_loss and not args.normal_dcl:
                 std_tag = "-Std" if args.dcl_suspicion_standardize else ""
-                susp_tag = f"_B{args.dcl_suspicion_bias}_Tau{args.dcl_suspicion_tau}{std_tag}"
+                susp_tag = f"_EMA{args.dcl_ema_momentum}_B{args.dcl_suspicion_bias}_Tau{args.dcl_suspicion_tau}{std_tag}"
             else:
                 susp_tag = ""
             dcl_tag = f"_DCL{dcl_variant}-SIGReg{args.sigreg_weight}{susp_tag}" if args.dcl_sigreg_loss else ""
