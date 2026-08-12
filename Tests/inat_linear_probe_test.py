@@ -112,6 +112,22 @@ def load_model(args: argparse.Namespace) -> DinoV2LoRA:
     state_dict = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
     cleaned = {(k[len("model."):] if k.startswith("model.") else k): v
                for k, v in state_dict.items()}
+    # Resize DCL memory-bank buffers to match the checkpoint before loading.
+    for key in ("dcl_sigreg_loss.class_means", "dcl_sigreg_loss.initialized"):
+        if key in cleaned:
+            buf = cleaned[key]
+            param = model
+            for attr in key.split("."):
+                param = getattr(param, attr, None)
+                if param is None:
+                    break
+            if param is not None and param.shape != buf.shape:
+                # Replace the registered buffer with the correct size
+                parent = model
+                parts = key.split(".")
+                for attr in parts[:-1]:
+                    parent = getattr(parent, attr)
+                parent.register_buffer(parts[-1], torch.empty_like(buf))
     model.load_state_dict(cleaned, strict=False)
     return model
 
