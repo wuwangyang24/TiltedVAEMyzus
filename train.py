@@ -31,6 +31,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test_cat", type=str, default="phylum",
                         help="Taxonomy level for kNN evaluation labels (inat only). "
                              "Options: kingdom, phylum, class, order, family, genus")
+    parser.add_argument("--superclass", type=str, default=None,
+                        help="Keep only iNat categories whose 'supercategory' matches "
+                             "this value (e.g. Plants, Insects). inat only.")
     parser.add_argument("--inat_train_metadata", type=str, default="train_mini.json",
                         help="Path to iNat2021 train metadata JSON")
     parser.add_argument("--inat_val_metadata", type=str, default="val.json",
@@ -265,6 +268,7 @@ def main() -> None:
                 num_workers=args.num_workers,
                 classes_per_batch=args.contrastive_classes_per_batch,
                 samples_per_class=args.contrastive_samples_per_class,
+                superclass=args.superclass,
                 seed=args.seed,
             )
         else:

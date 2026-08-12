@@ -758,6 +758,7 @@ class InatDataModule(pl.LightningDataModule):
                  num_workers: int = 4,
                  classes_per_batch: int = 0,
                  samples_per_class: int = 0,
+                 superclass: Optional[str] = None,
                  seed: int = 42) -> None:
         super().__init__()
         self.train_metadata = train_metadata
@@ -766,6 +767,7 @@ class InatDataModule(pl.LightningDataModule):
         self.val_image_dir = val_image_dir
         self.train_cat = train_cat
         self.test_cat = test_cat
+        self.superclass = superclass
         self.img_size = img_size
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -800,9 +802,14 @@ class InatDataModule(pl.LightningDataModule):
 
     @staticmethod
     def _parse_inat_json(metadata_path: str, image_dir: str,
-                         train_cat: str, test_cat: str
+                         train_cat: str, test_cat: str,
+                         superclass: Optional[str] = None
                          ) -> List[Tuple[str, str, str]]:
-        """Parse iNat2021 COCO-style JSON, return (path, train_cat_value, test_cat_value)."""
+        """Parse iNat2021 COCO-style JSON, return (path, train_cat_value, test_cat_value).
+
+        If ``superclass`` is given, only categories whose ``supercategory``
+        field matches it (case-insensitive) are kept.
+        """
         with open(metadata_path) as f:
             data = json.load(f)
 
@@ -816,6 +823,7 @@ class InatDataModule(pl.LightningDataModule):
         for img in data["images"]:
             img_map[img["id"]] = img["file_name"]
 
+        sc = superclass.lower() if superclass else None
         samples = []
         for ann in data["annotations"]:
             img_id = ann["image_id"]
@@ -823,6 +831,8 @@ class InatDataModule(pl.LightningDataModule):
             if img_id not in img_map or cat_id not in cat_map:
                 continue
             cat_info = cat_map[cat_id]
+            if sc is not None and str(cat_info.get("supercategory", "")).lower() != sc:
+                continue
             train_val = cat_info.get(train_cat)
             test_val = cat_info.get(test_cat)
             if train_val is None or test_val is None:
@@ -836,10 +846,10 @@ class InatDataModule(pl.LightningDataModule):
     def setup(self, stage: Optional[str] = None) -> None:
         train_raw = self._parse_inat_json(
             self.train_metadata, self.train_image_dir,
-            self.train_cat, self.test_cat)
+            self.train_cat, self.test_cat, self.superclass)
         val_raw = self._parse_inat_json(
             self.val_metadata, self.val_image_dir,
-            self.train_cat, self.test_cat)
+            self.train_cat, self.test_cat, self.superclass)
 
         # Build unified label encodings across both splits
         all_train_cats = sorted(set(s[1] for s in train_raw + val_raw))
@@ -864,9 +874,10 @@ class InatDataModule(pl.LightningDataModule):
         self.val_dataset = InatContrastiveDataset(val_samples, transform)
 
         print(
-            f"[InatDataModule] train={len(train_samples)}, val={len(val_samples)}, "
+            f"[InatDataModule] superclass={self.superclass}, "
             f"train_cat='{self.train_cat}' ({self.num_train_classes} classes), "
-            f"test_cat='{self.test_cat}' ({self.num_test_classes} classes)",
+            f"test_cat='{self.test_cat}' ({self.num_test_classes} classes), "
+            f"images: train={len(train_samples)}, val={len(val_samples)}",
             flush=True,
         )
 
