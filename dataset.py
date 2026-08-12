@@ -778,6 +778,7 @@ class InatDataModule(pl.LightningDataModule):
         self.train_classes: List[str] = []
         self.test_classes: List[str] = []
         self._train_labels: List[int] = []
+        self._val_labels: List[int] = []
         self.train_dataset: Optional[Dataset] = None
         self.val_dataset: Optional[Dataset] = None
 
@@ -868,6 +869,7 @@ class InatDataModule(pl.LightningDataModule):
         rng.shuffle(val_samples)
 
         self._train_labels = [s[1] for s in train_samples]
+        self._val_labels = [s[1] for s in val_samples]
 
         transform = self._build_transform()
         self.train_dataset = InatContrastiveDataset(train_samples, transform)
@@ -909,7 +911,7 @@ class InatDataModule(pl.LightningDataModule):
     def val_dataloader(self) -> DataLoader:
         if self.use_pk_sampler:
             batch_sampler = PKBatchSampler(
-                labels=self._train_labels,
+                labels=self._val_labels,
                 classes_per_batch=self.classes_per_batch,
                 samples_per_class=self.samples_per_class,
                 seed=self.seed,
