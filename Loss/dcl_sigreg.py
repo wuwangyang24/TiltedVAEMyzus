@@ -45,11 +45,17 @@ class DCLSIGRegLoss(nn.Module):
     def __init__(self, ema_momentum: float = 0.9,
                  suspicion_tau: float = 0.1,
                  suspicion_bias: float = 0.5,
+                 suspicion_standardize: bool = False,
                  normal_dcl: bool = False) -> None:
         super().__init__()
         self.ema_momentum = ema_momentum
         self.suspicion_tau = suspicion_tau
         self.suspicion_bias = suspicion_bias
+        # When True, z-score the class-mean similarities over the batch's
+        # negatives before the sigmoid so the operating point self-centers
+        # (avoids sigmoid saturation when all class means sit in a narrow,
+        # high-similarity band). ``suspicion_bias`` is then in std units.
+        self.suspicion_standardize = suspicion_standardize
         # When True, fall back to plain DCL+SIGReg: every negative is weighted
         # equally (no suspicion memory bank) and SIGReg acts on the batch
         # embeddings directly.
@@ -149,7 +155,15 @@ class DCLSIGRegLoss(nn.Module):
                 bank_normed = F.normalize(self.class_means, dim=1)
                 sample_means = bank_normed[labels_flat]         # (N, D)
                 mean_sim = sample_means @ sample_means.t()      # (N, N)
-                p = torch.sigmoid((mean_sim - self.suspicion_bias) / self.suspicion_tau)
+                if self.suspicion_standardize:
+                    # Center/scale by the negative-pair similarity distribution
+                    # so same/diff separate regardless of the absolute band.
+                    neg_bool = neg_mask.bool()
+                    ref = mean_sim[neg_bool] if neg_bool.any() else mean_sim
+                    score = (mean_sim - ref.mean()) / ref.std().clamp(min=1e-6)
+                else:
+                    score = mean_sim
+                p = torch.sigmoid((score - self.suspicion_bias) / self.suspicion_tau)
                 neg_weight = (1.0 - p).clamp(min=1e-6)
 
             # Weighted decoupled negative term: log( sum_j w_ij * exp(sim_ij) ).

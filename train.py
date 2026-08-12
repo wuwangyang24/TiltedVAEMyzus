@@ -145,6 +145,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dcl_suspicion_bias", type=float, default=0.5,
                         help="Similarity threshold (bias) of the DCL-SIGReg suspicion "
                              "sigmoid. Default: 0.5")
+    parser.add_argument("--dcl_suspicion_standardize", action="store_true",
+                        help="Z-score the class-mean similarities over the batch's "
+                             "negatives before the suspicion sigmoid (avoids "
+                             "saturation; --dcl_suspicion_bias is then in std units, "
+                             "try ~0 with --dcl_suspicion_tau ~1).")
     parser.add_argument("--normal_dcl", action="store_true",
                         help="With --dcl_sigreg_loss, use plain DCL+SIGReg: all "
                              "negatives weighted equally (no suspicion memory bank) "
@@ -337,6 +342,7 @@ def main() -> None:
             dcl_ema_momentum=args.dcl_ema_momentum,
             dcl_suspicion_tau=args.dcl_suspicion_tau,
             dcl_suspicion_bias=args.dcl_suspicion_bias,
+            dcl_suspicion_standardize=args.dcl_suspicion_standardize,
             dcl_normal=args.normal_dcl,
         )
 
@@ -436,7 +442,12 @@ def main() -> None:
         else:
             sigreg_tag = f"_SIGReg{args.sigreg_weight}" if args.contrastive_sigreg_loss else ""
             dcl_variant = "-Normal" if args.normal_dcl else ""
-            dcl_tag = f"_DCL{dcl_variant}-SIGReg{args.sigreg_weight}" if args.dcl_sigreg_loss else ""
+            if args.dcl_sigreg_loss and not args.normal_dcl:
+                std_tag = "-Std" if args.dcl_suspicion_standardize else ""
+                susp_tag = f"_B{args.dcl_suspicion_bias}_Tau{args.dcl_suspicion_tau}{std_tag}"
+            else:
+                susp_tag = ""
+            dcl_tag = f"_DCL{dcl_variant}-SIGReg{args.sigreg_weight}{susp_tag}" if args.dcl_sigreg_loss else ""
             ckpt_suffix = (
                 f"DINO_LoRA_{targets_tag}"
                 f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
