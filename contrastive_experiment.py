@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Tuple
 
 import torch
 import pytorch_lightning as pl
@@ -52,7 +52,7 @@ class ContrastiveExperiment(pl.LightningModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
 
-    def _step(self, batch: Any) -> Dict[str, torch.Tensor]:
+    def _step(self, batch: Any) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, Optional[torch.Tensor]]:
         # Support both (images, labels) and (images, train_labels, test_labels)
         if len(batch) == 3:
             images, labels, test_labels = batch
@@ -78,35 +78,98 @@ class ContrastiveExperiment(pl.LightningModule):
             loss_dict = self.model.loss_function(
                 embeddings, labels, temperature=self.temperature)
 
-        # Compute kNN accuracy on test_labels if available (iNat dataset)
-        if test_labels is not None:
-            with torch.no_grad():
-                normed = torch.nn.functional.normalize(embeddings, dim=1)
-                sim = normed @ normed.t()
-                self_mask = torch.eye(sim.size(0), device=sim.device)
-                test_knn = self.model._batch_knn_accuracy(
-                    sim, test_labels.view(-1, 1), self_mask)
-                loss_dict.update({
-                    f"test_{k}": v for k, v in test_knn.items()
-                })
-
-        return loss_dict
+        return loss_dict, embeddings, test_labels
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        loss_dict = self._step(batch)
+        loss_dict, _, _ = self._step(batch)
         self.log_dict(
             {f"train_{k}": v for k, v in loss_dict.items()},
             on_step=True, on_epoch=True, prog_bar=True,
         )
         return loss_dict["loss"]
 
+    def on_validation_epoch_start(self) -> None:
+        # Buffers for full-val-set kNN on the iNat test taxonomy level.
+        self._val_embeddings = []
+        self._val_test_labels = []
+
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        loss_dict = self._step(batch)
+        loss_dict, embeddings, test_labels = self._step(batch)
         self.log_dict(
             {f"val_{k}": v for k, v in loss_dict.items()},
             on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
         )
+        if test_labels is not None:
+            self._val_embeddings.append(embeddings.detach().cpu())
+            self._val_test_labels.append(test_labels.detach().view(-1).cpu())
         return loss_dict["loss"]
+
+    def on_validation_epoch_end(self) -> None:
+        if not getattr(self, "_val_embeddings", None):
+            return
+
+        embeddings = torch.cat(self._val_embeddings, dim=0)
+        labels = torch.cat(self._val_test_labels, dim=0)
+        self._val_embeddings = []
+        self._val_test_labels = []
+
+        # Gather the full validation set across DDP ranks so every rank computes
+        # kNN over the same complete set of embeddings.
+        embeddings = self._gather_across_ranks(embeddings)
+        labels = self._gather_across_ranks(labels)
+
+        knn = self._full_set_knn_accuracy(embeddings.to(self.device), labels.to(self.device))
+        # Metric names kept as "..._batch_knn_..." for checkpoint-callback compat,
+        # though this is a full-val-set retrieval, not a per-batch estimate.
+        self.log_dict(
+            {
+                "val_test_batch_knn_acc": knn[1],
+                "val_test_batch_knn_top3_acc": knn[3],
+                "val_test_batch_knn_top5_acc": knn[5],
+            },
+            prog_bar=True, sync_dist=False,
+        )
+
+    @staticmethod
+    def _gather_across_ranks(tensor: torch.Tensor) -> torch.Tensor:
+        if not (torch.distributed.is_available() and torch.distributed.is_initialized()):
+            return tensor
+        world_size = torch.distributed.get_world_size()
+        if world_size == 1:
+            return tensor
+        gathered: list = [None] * world_size
+        torch.distributed.all_gather_object(gathered, tensor.cpu())
+        return torch.cat([t.to(tensor.device) for t in gathered], dim=0)
+
+    @staticmethod
+    @torch.no_grad()
+    def _full_set_knn_accuracy(
+        embeddings: torch.Tensor, labels: torch.Tensor,
+        ks: Tuple[int, ...] = (1, 3, 5), chunk_size: int = 1024,
+    ) -> Dict[int, torch.Tensor]:
+        """Top-k KNN accuracy over the entire val set (cosine, leave-one-out).
+
+        A sample is a top-k hit if any of its k nearest neighbours across the
+        full set shares its label. Computed in row chunks to bound memory.
+        """
+        embeddings = torch.nn.functional.normalize(embeddings, dim=1)
+        labels = labels.view(-1)
+        n = embeddings.size(0)
+        max_k = min(max(ks), n - 1)
+        if max_k < 1:
+            return {k: torch.tensor(1.0, device=embeddings.device) for k in ks}
+
+        hits = {k: torch.zeros(n, dtype=torch.bool, device=embeddings.device) for k in ks}
+        for start in range(0, n, chunk_size):
+            end = min(start + chunk_size, n)
+            sim = embeddings[start:end] @ embeddings.t()       # (chunk, n)
+            rows = torch.arange(end - start, device=embeddings.device)
+            sim[rows, torch.arange(start, end, device=embeddings.device)] = float("-inf")
+            topk_idx = sim.topk(max_k, dim=1).indices           # (chunk, max_k)
+            match = labels[topk_idx] == labels[start:end].unsqueeze(1)
+            for k in ks:
+                hits[k][start:end] = match[:, :min(k, max_k)].any(dim=1)
+        return {k: hits[k].float().mean() for k in ks}
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
