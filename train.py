@@ -419,6 +419,8 @@ def main() -> None:
         k_val = args.contrastive_samples_per_class
         level_tag = "_Comp" if args.compound_level else ""
         dataset_tag = f"_inat_{args.train_cat}->{args.test_cat}" if args.dataset == "inat" else ""
+        if args.dataset == "inat" and args.superclass:
+            dataset_tag += f"_{args.superclass}"
         if args.ssl_lejepa:
             cv_tag = "_CompViews" if args.ssl_compound_views else ""
             aug_tag = (f"_Aug-R{args.ssl_rotation:.0f}T{args.ssl_translate}"
