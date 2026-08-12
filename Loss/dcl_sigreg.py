@@ -67,14 +67,18 @@ class DCLSIGRegLoss(nn.Module):
 
     def _ensure_capacity(self, num_classes: int, dim: int,
                          device, dtype) -> None:
-        """Grow the memory bank to hold at least ``num_classes`` rows."""
+        """Grow the memory bank to hold at least ``num_classes`` rows.
+
+        The bank is always kept in float32 so the running EMA does not drift
+        under low-precision (e.g. bf16) training.
+        """
         cur = self.class_means.size(0)
         if cur >= num_classes and self.class_means.numel() > 0:
             return
-        new_means = torch.zeros(num_classes, dim, device=device, dtype=dtype)
+        new_means = torch.zeros(num_classes, dim, device=device, dtype=torch.float32)
         new_init = torch.zeros(num_classes, dtype=torch.bool, device=device)
         if cur > 0:
-            new_means[:cur] = self.class_means.to(device=device, dtype=dtype)
+            new_means[:cur] = self.class_means.to(device=device, dtype=torch.float32)
             new_init[:cur] = self.initialized.to(device=device)
         self.class_means = new_means
         self.initialized = new_init
@@ -83,6 +87,7 @@ class DCLSIGRegLoss(nn.Module):
     def _update_memory(self, batch_means: Tensor, present_mask: Tensor) -> None:
         """EMA-update the memory bank from detached per-class batch means."""
         m = self.ema_momentum
+        batch_means = batch_means.to(self.class_means.dtype)   # keep the bank in float32
         new_init = present_mask & (~self.initialized)
         upd = present_mask & self.initialized
         self.class_means[new_init] = batch_means[new_init]
@@ -177,7 +182,8 @@ class DCLSIGRegLoss(nn.Module):
             absent_mask = self.initialized & (~present_mask)
             pool = [class_means_batch[present_mask]]
             if absent_mask.any():
-                pool.append(self.class_means[absent_mask].detach())
+                pool.append(
+                    self.class_means[absent_mask].detach().to(class_means_batch.dtype))
             pool_means = torch.cat(pool, dim=0)
             if pool_means.size(0) >= 2:
                 sr_loss = sigreg_loss(
