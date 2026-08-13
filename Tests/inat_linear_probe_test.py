@@ -173,7 +173,7 @@ def linear_probe(
         logits = classifier(train_embs)
         loss = F.cross_entropy(logits, train_labels)
         loss.backward()
-        return loss
+        return loss.detach()
 
     for _ in range(epochs):
         optimizer.step(closure)
