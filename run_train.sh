@@ -33,7 +33,7 @@ RUN_NAME="${RUN_NAME:-${MODEL}-run}"
 OUTPUT_DIR="${OUTPUT_DIR:-results}"
 
 # Hard-coded W&B API key (rotate if leaked; keep this file out of git).
-export WANDB_API_KEY="${WANDB_API_KEY:-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}"
+export WANDB_API_KEY="${WANDB_API_KEY:-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}"
 
 # W&B sync mode. Use "offline" to log locally without network (avoids the
 # training hang from a blocked/slow connection); sync later with `wandb sync`.
