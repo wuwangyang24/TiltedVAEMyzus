@@ -86,6 +86,9 @@ class ContrastiveExperiment(pl.LightningModule):
             "train_loss", loss_dict["loss"],
             on_step=True, on_epoch=True, prog_bar=True,
         )
+        for key in ("suspicion_mean", "suspicion_same_testcat", "suspicion_diff_testcat"):
+            if key in loss_dict:
+                self.log(f"train_{key}", loss_dict[key], on_step=True, on_epoch=True)
         return loss_dict["loss"]
 
     def on_validation_epoch_start(self) -> None:
