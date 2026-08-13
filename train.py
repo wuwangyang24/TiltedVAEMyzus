@@ -494,25 +494,13 @@ def main() -> None:
     if is_dino and not args.ssl_lejepa:
         knn_checkpoint_callback = ModelCheckpoint(
             dirpath=ckpt_dir,
-            filename=args.model + "-best-knn-{epoch:02d}-{val_batch_knn_acc:.4f}",
-            monitor="val_batch_knn_acc",
+            filename=args.model + "-best-knn-{epoch:02d}-{val_knn_acc:.4f}",
+            monitor="val_knn_acc",
             mode="max",
             save_top_k=1,
             save_last=False,
         )
         callbacks.append(knn_checkpoint_callback)
-
-        if args.dataset == "inat":
-            # Additional checkpoint monitoring kNN on the test taxonomy level
-            test_knn_checkpoint_callback = ModelCheckpoint(
-                dirpath=ckpt_dir,
-                filename=args.model + "-best-test-knn-{epoch:02d}-{val_test_batch_knn_acc:.4f}",
-                monitor="val_test_batch_knn_acc",
-                mode="max",
-                save_top_k=1,
-                save_last=False,
-            )
-            callbacks.append(test_knn_checkpoint_callback)
 
     # Trainer
     # Parse --devices: "auto" stays as-is; comma-separated digits become a

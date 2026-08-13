@@ -122,9 +122,9 @@ class ContrastiveExperiment(pl.LightningModule):
         knn = self._full_set_knn_accuracy(val_embeddings, val_labels)
         self.log_dict(
             {
-                "val_test_batch_knn_acc": knn[1],
-                "val_test_batch_knn_top3_acc": knn[3],
-                "val_test_batch_knn_top5_acc": knn[5],
+                "val_knn_acc": knn[1],
+                "val_knn_top3_acc": knn[3],
+                "val_knn_top5_acc": knn[5],
             },
             prog_bar=True, sync_dist=False,
         )
