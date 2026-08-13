@@ -196,10 +196,12 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Linear probing test on iNat val embeddings")
 
     p.add_argument("--checkpoint", required=True, help="Model checkpoint (.ckpt)")
-    p.add_argument("--train_metadata", required=True, help="iNat2021 train metadata JSON")
-    p.add_argument("--train_image_dir", required=True, help="Image directory for train set")
+    p.add_argument("--train_metadata", default=None, help="iNat2021 train metadata JSON (if omitted, val set is split)")
+    p.add_argument("--train_image_dir", default=None, help="Image directory for train set")
     p.add_argument("--val_metadata", required=True, help="iNat2021 val metadata JSON")
     p.add_argument("--val_image_dir", required=True, help="Image directory for val set")
+    p.add_argument("--train_fraction", type=float, default=0.8,
+                   help="Fraction of val set used for training when no train set is provided")
     p.add_argument("--test_cat", required=True,
                    help="Taxonomy level for linear probe labels (e.g. family, genus)")
     p.add_argument("--superclass", default=None,
@@ -234,19 +236,28 @@ def main() -> None:
     args = parse_args()
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
 
-    # Parse train and val metadata
-    train_raw, train_classes = parse_inat_json(
-        args.train_metadata, args.train_image_dir, args.test_cat, args.superclass)
+    # Parse metadata
     val_raw, val_classes = parse_inat_json(
         args.val_metadata, args.val_image_dir, args.test_cat, args.superclass)
 
-    # Unified label encoding across both splits
-    all_classes = sorted(set(train_classes + val_classes))
-    class2idx = {c: i for i, c in enumerate(all_classes)}
-    num_classes = len(all_classes)
+    if args.train_metadata and args.train_image_dir:
+        train_raw, train_classes = parse_inat_json(
+            args.train_metadata, args.train_image_dir, args.test_cat, args.superclass)
+        all_classes = sorted(set(train_classes + val_classes))
+        class2idx = {c: i for i, c in enumerate(all_classes)}
+        train_samples = [(path, class2idx[label]) for path, label in train_raw]
+        val_samples = [(path, class2idx[label]) for path, label in val_raw]
+    else:
+        all_classes = sorted(set(val_classes))
+        class2idx = {c: i for i, c in enumerate(all_classes)}
+        indexed = [(path, class2idx[label]) for path, label in val_raw]
+        rng = np.random.RandomState(args.seed)
+        perm = rng.permutation(len(indexed))
+        split = int(len(indexed) * args.train_fraction)
+        train_samples = [indexed[i] for i in perm[:split]]
+        val_samples = [indexed[i] for i in perm[split:]]
 
-    train_samples = [(path, class2idx[label]) for path, label in train_raw]
-    val_samples = [(path, class2idx[label]) for path, label in val_raw]
+    num_classes = len(all_classes)
     print(f"Train set: {len(train_samples)} images, {num_classes} {args.test_cat} classes")
     print(f"Val set:   {len(val_samples)} images")
 
