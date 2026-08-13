@@ -82,8 +82,8 @@ class ContrastiveExperiment(pl.LightningModule):
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         loss_dict, _, _ = self._step(batch)
-        self.log_dict(
-            {f"train_{k}": v for k, v in loss_dict.items()},
+        self.log(
+            "train_loss", loss_dict["loss"],
             on_step=True, on_epoch=True, prog_bar=True,
         )
         return loss_dict["loss"]
@@ -94,8 +94,8 @@ class ContrastiveExperiment(pl.LightningModule):
 
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         loss_dict, embeddings, test_labels = self._step(batch)
-        self.log_dict(
-            {f"val_{k}": v for k, v in loss_dict.items()},
+        self.log(
+            "val_loss", loss_dict["loss"],
             on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
         )
         if test_labels is not None:
@@ -128,43 +128,6 @@ class ContrastiveExperiment(pl.LightningModule):
             },
             prog_bar=True, sync_dist=False,
         )
-
-        # Linear probe: encode train set, fit classifier, evaluate on val.
-        train_dataloader = self.trainer.train_dataloader
-        if train_dataloader is not None:
-            train_embs, train_labs = self._encode_dataloader(train_dataloader, device)
-            if train_embs.size(0) > 0:
-                train_embs = self._gather_across_ranks(train_embs.cpu()).to(device)
-                train_labs = self._gather_across_ranks(train_labs.cpu()).to(device)
-                probe = self._linear_probe(train_embs, train_labs, val_embeddings, val_labels)
-                self.log_dict(
-                    {
-                        "val_linear_probe_top1": probe["top1_acc"],
-                        "val_linear_probe_top5": probe["top5_acc"],
-                    },
-                    prog_bar=True, sync_dist=False,
-                )
-
-    @torch.no_grad()
-    def _encode_dataloader(self, dataloader, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Encode all batches from a dataloader, return (embeddings, test_labels)."""
-        all_embs, all_labs = [], []
-        was_training = self.model.training
-        self.model.eval()
-        for batch in dataloader:
-            if len(batch) == 3:
-                images, _, test_labels = batch
-            else:
-                break
-            images = images.to(device)
-            embs = self.model.encode(images, normalize=True)
-            all_embs.append(embs.cpu())
-            all_labs.append(test_labels.view(-1))
-        if was_training:
-            self.model.train()
-        if not all_embs:
-            return torch.empty(0), torch.empty(0, dtype=torch.long)
-        return torch.cat(all_embs, dim=0), torch.cat(all_labs, dim=0)
 
     @staticmethod
     def _gather_across_ranks(tensor: torch.Tensor) -> torch.Tensor:
@@ -206,37 +169,6 @@ class ContrastiveExperiment(pl.LightningModule):
             for k in ks:
                 hits[k][start:end] = match[:, :min(k, max_k)].any(dim=1)
         return {k: hits[k].float().mean() for k in ks}
-
-    @staticmethod
-    def _linear_probe(
-        train_embs: torch.Tensor, train_labs: torch.Tensor,
-        test_embs: torch.Tensor, test_labs: torch.Tensor,
-        lr: float = 0.1, max_iter: int = 100,
-    ) -> Dict[str, torch.Tensor]:
-        """Fit linear classifier on train embeddings, evaluate on test."""
-        num_classes = int(max(train_labs.max(), test_labs.max()).item()) + 1
-        dim = train_embs.size(1)
-        classifier = torch.nn.Linear(dim, num_classes, device=train_embs.device)
-        optimizer = torch.optim.LBFGS(classifier.parameters(), lr=lr, max_iter=max_iter)
-
-        train_embs = train_embs.detach()
-
-        def closure():
-            optimizer.zero_grad()
-            loss = torch.nn.functional.cross_entropy(classifier(train_embs), train_labs)
-            loss.backward()
-            return loss
-
-        optimizer.step(closure)
-
-        classifier.eval()
-        with torch.no_grad():
-            logits = classifier(test_embs)
-            top1 = (logits.argmax(dim=1) == test_labs).float().mean()
-            k = min(5, num_classes)
-            top5 = (logits.topk(k, dim=1).indices == test_labs.unsqueeze(1)).any(dim=1).float().mean()
-
-        return {"top1_acc": top1, "top5_acc": top5}
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
@@ -336,16 +268,16 @@ class LeJEPAExperiment(pl.LightningModule):
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         loss_dict = self._step(batch)
-        self.log_dict(
-            {f"train_{k}": v for k, v in loss_dict.items()},
+        self.log(
+            "train_loss", loss_dict["loss"],
             on_step=True, on_epoch=True, prog_bar=True,
         )
         return loss_dict["loss"]
 
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         loss_dict = self._step(batch)
-        self.log_dict(
-            {f"val_{k}": v for k, v in loss_dict.items()},
+        self.log(
+            "val_loss", loss_dict["loss"],
             on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
         )
         return loss_dict["loss"]
