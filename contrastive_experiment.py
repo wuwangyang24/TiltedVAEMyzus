@@ -1,6 +1,8 @@
 from typing import Any, Dict, Optional, Tuple
 
+import numpy as np
 import torch
+import torch.nn.functional as F
 import pytorch_lightning as pl
 
 from Models import DinoV2LoRA
@@ -132,6 +134,15 @@ class ContrastiveExperiment(pl.LightningModule):
             prog_bar=True, sync_dist=False,
         )
 
+        probe = self._linear_probe(val_embeddings, val_labels)
+        self.log_dict(
+            {
+                "val_linprobe_top1": probe["top1_acc"],
+                "val_linprobe_top5": probe["top5_acc"],
+            },
+            prog_bar=False, sync_dist=False,
+        )
+
     @staticmethod
     def _gather_across_ranks(tensor: torch.Tensor) -> torch.Tensor:
         if not (torch.distributed.is_available() and torch.distributed.is_initialized()):
@@ -142,6 +153,45 @@ class ContrastiveExperiment(pl.LightningModule):
         gathered: list = [None] * world_size
         torch.distributed.all_gather_object(gathered, tensor.cpu())
         return torch.cat([t.to(tensor.device) for t in gathered], dim=0)
+
+    @staticmethod
+    @torch.no_grad()
+    def _linear_probe(
+        embeddings: torch.Tensor, labels: torch.Tensor,
+        train_fraction: float = 0.8, seed: int = 42,
+        lr: float = 0.1, epochs: int = 100,
+    ) -> Dict[str, torch.Tensor]:
+        """Train/test linear probe on the val embeddings."""
+        n = embeddings.size(0)
+        num_classes = int(labels.max().item()) + 1
+        rng = np.random.RandomState(seed)
+        perm = rng.permutation(n)
+        split = int(n * train_fraction)
+        train_idx, test_idx = perm[:split], perm[split:]
+
+        normed = F.normalize(embeddings, dim=1)
+        train_e, train_l = normed[train_idx], labels[train_idx]
+        test_e, test_l = normed[test_idx], labels[test_idx]
+
+        dim = train_e.size(1)
+        classifier = torch.nn.Linear(dim, num_classes, device=train_e.device)
+
+        with torch.enable_grad():
+            optimizer = torch.optim.LBFGS(classifier.parameters(), lr=lr, max_iter=20)
+            def closure():
+                optimizer.zero_grad()
+                loss = F.cross_entropy(classifier(train_e), train_l)
+                loss.backward()
+                return loss.detach()
+            for _ in range(epochs):
+                optimizer.step(closure)
+
+        classifier.eval()
+        logits = classifier(test_e)
+        top1 = (logits.argmax(dim=1) == test_l).float().mean()
+        k = min(5, num_classes)
+        top5 = (logits.topk(k, dim=1).indices == test_l.unsqueeze(1)).any(dim=1).float().mean()
+        return {"top1_acc": top1, "top5_acc": top5}
 
     @staticmethod
     @torch.no_grad()
