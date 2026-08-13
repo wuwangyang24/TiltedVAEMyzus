@@ -226,7 +226,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project", type=str, default="tilted-vae-myzus",
                         help="W&B project name")
     parser.add_argument("--run_name", type=str, default=None, help="W&B run name")
-    parser.add_argument("--entity", type=str, default=None,
+    parser.add_argument("--entity", type=str, default="fm_val",
                         help="W&B entity (team or username)")
     parser.add_argument("--tags", type=str, nargs="*", default=None,
                         help="Optional W&B run tags, space separated")
