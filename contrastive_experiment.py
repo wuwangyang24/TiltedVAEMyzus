@@ -56,7 +56,7 @@ class ContrastiveExperiment(pl.LightningModule):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
 
-    def _step(self, batch: Any) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, Optional[torch.Tensor]]:
+    def _step(self, batch: Any) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         # Support both (images, labels) and (images, train_labels, test_labels)
         if len(batch) == 3:
             images, labels, test_labels = batch
@@ -89,10 +89,10 @@ class ContrastiveExperiment(pl.LightningModule):
             loss_dict = self.model.loss_function(
                 embeddings, labels, temperature=self.temperature)
 
-        return loss_dict, embeddings, test_labels
+        return loss_dict, embeddings, labels, test_labels
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        loss_dict, _, _ = self._step(batch)
+        loss_dict, _, _, _ = self._step(batch)
         self.log(
             "train_loss", loss_dict["loss"],
             on_step=True, on_epoch=True, prog_bar=True,
@@ -104,16 +104,18 @@ class ContrastiveExperiment(pl.LightningModule):
 
     def on_validation_epoch_start(self) -> None:
         self._val_embeddings = []
+        self._val_train_labels = []
         self._val_test_labels = []
 
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        loss_dict, embeddings, test_labels = self._step(batch)
+        loss_dict, embeddings, train_labels, test_labels = self._step(batch)
         self.log(
             "val_loss", loss_dict["loss"],
             on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
         )
         if test_labels is not None:
             self._val_embeddings.append(embeddings.detach().cpu())
+            self._val_train_labels.append(train_labels.detach().view(-1).cpu())
             self._val_test_labels.append(test_labels.detach().view(-1).cpu())
         return loss_dict["loss"]
 
@@ -122,18 +124,23 @@ class ContrastiveExperiment(pl.LightningModule):
             return
 
         val_embeddings = torch.cat(self._val_embeddings, dim=0)
-        val_labels = torch.cat(self._val_test_labels, dim=0)
+        val_train_labels = torch.cat(self._val_train_labels, dim=0)
+        val_test_labels = torch.cat(self._val_test_labels, dim=0)
         self._val_embeddings = []
+        self._val_train_labels = []
         self._val_test_labels = []
 
         val_embeddings = self._gather_across_ranks(val_embeddings)
-        val_labels = self._gather_across_ranks(val_labels)
+        val_train_labels = self._gather_across_ranks(val_train_labels)
+        val_test_labels = self._gather_across_ranks(val_test_labels)
 
         device = self.device
         val_embeddings = val_embeddings.to(device)
-        val_labels = val_labels.to(device)
+        val_train_labels = val_train_labels.to(device)
+        val_test_labels = val_test_labels.to(device)
 
-        knn = self._full_set_knn_accuracy(val_embeddings, val_labels)
+        # KNN and linear probe on test_cat labels.
+        knn = self._full_set_knn_accuracy(val_embeddings, val_test_labels)
         self.log_dict(
             {
                 "val_knn_acc": knn[1],
@@ -143,11 +150,21 @@ class ContrastiveExperiment(pl.LightningModule):
             prog_bar=True, sync_dist=False,
         )
 
-        probe = self._linear_probe(val_embeddings, val_labels)
+        probe_test = self._linear_probe(val_embeddings, val_test_labels)
         self.log_dict(
             {
-                "val_linprobe_top1": probe["top1_acc"],
-                "val_linprobe_top5": probe["top5_acc"],
+                "val_linprobe_top1": probe_test["top1_acc"],
+                "val_linprobe_top5": probe_test["top5_acc"],
+            },
+            prog_bar=False, sync_dist=False,
+        )
+
+        # Linear probe on train_cat labels.
+        probe_train = self._linear_probe(val_embeddings, val_train_labels)
+        self.log_dict(
+            {
+                "val_linprobe_traincat_top1": probe_train["top1_acc"],
+                "val_linprobe_traincat_top5": probe_train["top5_acc"],
             },
             prog_bar=False, sync_dist=False,
         )
