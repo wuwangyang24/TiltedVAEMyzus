@@ -68,7 +68,6 @@ class DCLSoftPosLoss(nn.Module):
         self_mask = torch.eye(n, device=device)
         pos_mask = torch.eq(labels_col, labels_col.t()).float()
         pos_mask = (pos_mask - self_mask).clamp(min=0.0)
-        neg_mask = 1.0 - torch.eq(labels_col, labels_col.t()).float()
         pos_per_anchor = pos_mask.sum(dim=1)
         valid = pos_per_anchor > 0
 
