@@ -123,6 +123,8 @@ class DinoV2LoRA(nn.Module):
                  dcl_normal: bool = False,
                  dcl_soft_pos: bool = False,
                  dcl_soft_pos_tau: float = 0.1,
+                 sinkhorn: bool = False,
+                 sinkhorn_iters: int = 5,
                  pretrained: bool = True) -> None:
         super().__init__()
 
@@ -184,6 +186,8 @@ class DinoV2LoRA(nn.Module):
 
         self.dcl_soft_pos_loss = DCLSoftPosLoss(
             pos_weight_tau=dcl_soft_pos_tau,
+            sinkhorn=sinkhorn,
+            sinkhorn_iters=sinkhorn_iters,
         ) if dcl_soft_pos else None
 
     def trainable_parameters(self) -> List[nn.Parameter]:
@@ -208,7 +212,8 @@ class DinoV2LoRA(nn.Module):
 
     def loss_function(self, embeddings: Tensor, labels: Tensor,
                       **kwargs) -> Dict[str, Tensor]:
-        return infonce_loss(embeddings, labels, temperature=self.temperature, **kwargs)
+        kwargs.setdefault("temperature", self.temperature)
+        return infonce_loss(embeddings, labels, **kwargs)
 
     def contrastive_sigreg_loss_function(
         self, embeddings: Tensor, labels: Tensor, **kwargs,

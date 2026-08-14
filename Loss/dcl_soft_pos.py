@@ -11,6 +11,15 @@ from .utils import sigreg_loss, batch_knn_accuracy, gaussianity_metrics
 _SMALL_NUM = np.log(1e-45)
 
 
+def sinkhorn_normalize(M: Tensor, n_iters: int = 5) -> Tensor:
+    """Sinkhorn-Knopp iterations to produce a doubly-stochastic matrix."""
+    M = M.clamp(min=1e-12)
+    for _ in range(n_iters):
+        M = M / M.sum(dim=1, keepdim=True).clamp(min=1e-12)
+        M = M / M.sum(dim=0, keepdim=True).clamp(min=1e-12)
+    return M
+
+
 class DCLSoftPosLoss(nn.Module):
     """DCL + SIGReg with similarity-weighted positives.
 
@@ -26,11 +35,18 @@ class DCLSoftPosLoss(nn.Module):
         pos_weight_tau: temperature for the softmax that turns positive-pair
             similarities into weights.  Lower values sharpen the distribution
             (more weight on the closest positives).
+        sinkhorn: if True, replace per-row softmax with Sinkhorn-Knopp
+            iterations to produce a doubly-stochastic weight matrix.
+        sinkhorn_iters: number of Sinkhorn-Knopp iterations.
     """
 
-    def __init__(self, pos_weight_tau: float = 0.1) -> None:
+    def __init__(self, pos_weight_tau: float = 0.1,
+                 sinkhorn: bool = False,
+                 sinkhorn_iters: int = 5) -> None:
         super().__init__()
         self.pos_weight_tau = pos_weight_tau
+        self.sinkhorn = sinkhorn
+        self.sinkhorn_iters = sinkhorn_iters
 
     def forward(self, embeddings: Tensor, labels: Tensor,
                 sigreg_weight: float = 0.1,
@@ -62,8 +78,13 @@ class DCLSoftPosLoss(nn.Module):
         # --- Soft-weighted positive term ---
         raw_cos = normed @ normed.t()
         pos_weight_logits = raw_cos / self.pos_weight_tau
-        pos_weight_logits = pos_weight_logits + (1.0 - pos_mask) * _SMALL_NUM
-        pos_weights = F.softmax(pos_weight_logits, dim=1) * pos_mask
+        if self.sinkhorn:
+            pos_weights = (pos_weight_logits.exp()) * pos_mask
+            pos_weights = sinkhorn_normalize(pos_weights, self.sinkhorn_iters)
+            pos_weights = pos_weights * pos_mask
+        else:
+            pos_weight_logits = pos_weight_logits + (1.0 - pos_mask) * _SMALL_NUM
+            pos_weights = F.softmax(pos_weight_logits, dim=1) * pos_mask
 
         weighted_pos_sim = (pos_weights * sim).sum(dim=1)
         if valid.any():

@@ -162,6 +162,12 @@ def parse_args() -> argparse.Namespace:
                         help="Temperature for the positive-pair softmax weighting. "
                              "Lower values concentrate weight on closest positives. "
                              "Default: 0.1")
+    parser.add_argument("--sinkhorn", action="store_true",
+                        help="Use Sinkhorn-Knopp iterations to produce a doubly-stochastic "
+                             "positive weight matrix instead of row-wise softmax. "
+                             "Only used with --dcl_soft_pos_loss.")
+    parser.add_argument("--sinkhorn_iters", type=int, default=5,
+                        help="Number of Sinkhorn-Knopp iterations. Default: 5")
 
     # LeJEPA self-supervised training (only used when --model dino_lora)
     parser.add_argument("--ssl_lejepa", action="store_true",
@@ -356,6 +362,8 @@ def main() -> None:
             dcl_normal=args.normal_dcl,
             dcl_soft_pos=args.dcl_soft_pos_loss,
             dcl_soft_pos_tau=args.dcl_soft_pos_tau,
+            sinkhorn=args.sinkhorn,
+            sinkhorn_iters=args.sinkhorn_iters,
         )
 
         if args.ssl_lejepa:
@@ -461,7 +469,7 @@ def main() -> None:
             else:
                 susp_tag = ""
             dcl_tag = f"_DCL{dcl_variant}-SIGReg{args.sigreg_weight}{susp_tag}" if args.dcl_sigreg_loss else ""
-            softpos_tag = f"_DCLSoftPos-Tau{args.dcl_soft_pos_tau}-SIGReg{args.sigreg_weight}" if args.dcl_soft_pos_loss else ""
+            softpos_tag = f"_DCLSoftPos-Tau{args.dcl_soft_pos_tau}{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}-SIGReg{args.sigreg_weight}" if args.dcl_soft_pos_loss else ""
             ckpt_suffix = (
                 f"DINO_LoRA_{targets_tag}"
                 f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
