@@ -34,6 +34,7 @@ class ContrastiveExperiment(pl.LightningModule):
                  max_epochs: int = 100,
                  contrastive_sigreg_loss: bool = False,
                  dcl_sigreg_loss: bool = False,
+                 dcl_soft_pos_loss: bool = False,
                  sigreg_weight: float = 0.1,
                  sigreg_slices: int = 512) -> None:
         super().__init__()
@@ -47,6 +48,7 @@ class ContrastiveExperiment(pl.LightningModule):
         self.max_epochs = max_epochs
         self.contrastive_sigreg_loss = contrastive_sigreg_loss
         self.dcl_sigreg_loss = dcl_sigreg_loss
+        self.dcl_soft_pos_loss = dcl_soft_pos_loss
         self.sigreg_weight = sigreg_weight
         self.sigreg_slices = sigreg_slices
         self.save_hyperparameters(ignore=["model"])
@@ -62,7 +64,14 @@ class ContrastiveExperiment(pl.LightningModule):
             images, labels = batch
             test_labels = None
 
-        if self.dcl_sigreg_loss:
+        if self.dcl_soft_pos_loss:
+            embeddings = self.model(images, normalize=False)
+            loss_dict = self.model.dcl_soft_pos_loss_function(
+                embeddings, labels, temperature=self.temperature,
+                sigreg_weight=self.sigreg_weight,
+                sigreg_slices=self.sigreg_slices,
+                test_labels=test_labels)
+        elif self.dcl_sigreg_loss:
             embeddings = self.model(images, normalize=False)
             loss_dict = self.model.dcl_sigreg_loss_function(
                 embeddings, labels, temperature=self.temperature,

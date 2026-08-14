@@ -7,8 +7,8 @@ from torch import Tensor
 from torch.nn import functional as F
 
 from Loss import (
-    infonce_loss, contrastive_sigreg_loss, DCLSIGRegLoss, lejepa_loss,
-    sigreg_loss, batch_knn_accuracy, gaussianity_metrics,
+    infonce_loss, contrastive_sigreg_loss, DCLSIGRegLoss, DCLSoftPosLoss,
+    lejepa_loss, sigreg_loss, batch_knn_accuracy, gaussianity_metrics,
 )
 
 try:
@@ -121,6 +121,8 @@ class DinoV2LoRA(nn.Module):
                  dcl_suspicion_bias: float = 0.5,
                  dcl_suspicion_standardize: bool = False,
                  dcl_normal: bool = False,
+                 dcl_soft_pos: bool = False,
+                 dcl_soft_pos_tau: float = 0.1,
                  pretrained: bool = True) -> None:
         super().__init__()
 
@@ -180,6 +182,10 @@ class DinoV2LoRA(nn.Module):
             normal_dcl=dcl_normal,
         )
 
+        self.dcl_soft_pos_loss = DCLSoftPosLoss(
+            pos_weight_tau=dcl_soft_pos_tau,
+        ) if dcl_soft_pos else None
+
     def trainable_parameters(self) -> List[nn.Parameter]:
         """Return only the trainable (LoRA + projection head) parameters."""
         return [p for p in self.parameters() if p.requires_grad]
@@ -213,6 +219,11 @@ class DinoV2LoRA(nn.Module):
         self, embeddings: Tensor, labels: Tensor, **kwargs,
     ) -> Dict[str, Tensor]:
         return self.dcl_sigreg_loss(embeddings, labels, **kwargs)
+
+    def dcl_soft_pos_loss_function(
+        self, embeddings: Tensor, labels: Tensor, **kwargs,
+    ) -> Dict[str, Tensor]:
+        return self.dcl_soft_pos_loss(embeddings, labels, **kwargs)
 
     def lejepa_loss_function(self, view_embeddings: Tensor,
                              **kwargs) -> Dict[str, Tensor]:

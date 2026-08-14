@@ -154,6 +154,14 @@ def parse_args() -> argparse.Namespace:
                         help="With--dcl_sigreg_loss, use plain DCL+SIGReg: all "
                              "negatives weighted equally (no suspicion memory bank) "
                              "and SIGReg applied to the batch embeddings.")
+    parser.add_argument("--dcl_soft_pos_loss", action="store_true",
+                        help="Use DCL with similarity-weighted positives: positive "
+                             "pairs that are more similar get larger weight, forming "
+                             "tighter sub-clusters. Negatives are plain DCL.")
+    parser.add_argument("--dcl_soft_pos_tau", type=float, default=0.1,
+                        help="Temperature for the positive-pair softmax weighting. "
+                             "Lower values concentrate weight on closest positives. "
+                             "Default: 0.1")
 
     # LeJEPA self-supervised training (only used when --model dino_lora)
     parser.add_argument("--ssl_lejepa", action="store_true",
@@ -346,6 +354,8 @@ def main() -> None:
             dcl_suspicion_bias=args.dcl_suspicion_bias,
             dcl_suspicion_standardize=args.dcl_suspicion_standardize,
             dcl_normal=args.normal_dcl,
+            dcl_soft_pos=args.dcl_soft_pos_loss,
+            dcl_soft_pos_tau=args.dcl_soft_pos_tau,
         )
 
         if args.ssl_lejepa:
@@ -373,6 +383,7 @@ def main() -> None:
                 max_epochs=args.epochs,
                 contrastive_sigreg_loss=args.contrastive_sigreg_loss,
                 dcl_sigreg_loss=args.dcl_sigreg_loss,
+                dcl_soft_pos_loss=args.dcl_soft_pos_loss,
                 sigreg_weight=args.sigreg_weight,
                 sigreg_slices=args.sigreg_slices,
             )
