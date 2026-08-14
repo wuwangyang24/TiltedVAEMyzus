@@ -461,6 +461,7 @@ def main() -> None:
             else:
                 susp_tag = ""
             dcl_tag = f"_DCL{dcl_variant}-SIGReg{args.sigreg_weight}{susp_tag}" if args.dcl_sigreg_loss else ""
+            softpos_tag = f"_DCLSoftPos-Tau{args.dcl_soft_pos_tau}-SIGReg{args.sigreg_weight}" if args.dcl_soft_pos_loss else ""
             ckpt_suffix = (
                 f"DINO_LoRA_{targets_tag}"
                 f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
@@ -470,6 +471,7 @@ def main() -> None:
                 f"{level_tag}"
                 f"{sigreg_tag}"
                 f"{dcl_tag}"
+                f"{softpos_tag}"
                 f"{dataset_tag}"
             )
     else:
