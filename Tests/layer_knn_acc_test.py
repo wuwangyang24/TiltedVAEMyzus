@@ -121,7 +121,25 @@ def load_model(args: argparse.Namespace) -> DinoV2LoRA:
                 buf = cleaned[key]
                 if getattr(parent, parts[-1]).shape != buf.shape:
                     parent.register_buffer(parts[-1], torch.empty_like(buf))
-        model.load_state_dict(cleaned, strict=False)
+        incompatible = model.load_state_dict(cleaned, strict=False)
+
+        # strict=False silently drops mismatched keys. If the LoRA adapters in
+        # the checkpoint don't match the ones built here (wrong rank/alpha/
+        # targets/backbone), they stay at zero-init (identity) and the test
+        # ends up measuring the *frozen pretrained* backbone. Surface that.
+        ckpt_lora = [k for k in cleaned if "lora_" in k]
+        missing_lora = [k for k in incompatible.missing_keys if "lora_" in k]
+        unexpected_lora = [k for k in incompatible.unexpected_keys if "lora_" in k]
+        print(f"[load_checkpoint] loaded {len(cleaned)} tensors; "
+              f"missing={len(incompatible.missing_keys)}, "
+              f"unexpected={len(incompatible.unexpected_keys)}")
+        print(f"[load_checkpoint] LoRA tensors in checkpoint: {len(ckpt_lora)}; "
+              f"missing_lora={len(missing_lora)}, unexpected_lora={len(unexpected_lora)}")
+        if unexpected_lora or (ckpt_lora and missing_lora):
+            print("[load_checkpoint] WARNING: LoRA keys did not match the built "
+                  "model. The adapters are NOT loaded (identity), so results "
+                  "reflect the pretrained backbone. Check --lora_targets/"
+                  "--lora_rank/--lora_alpha/--dino_backbone against the checkpoint.")
     return model
 
 
