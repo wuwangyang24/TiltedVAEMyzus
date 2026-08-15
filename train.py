@@ -524,28 +524,22 @@ def main() -> None:
 
     # Callbacks
     ckpt_dir = os.path.join(args.output_dir, "checkpoints", ckpt_suffix)
-    checkpoint_callback = ModelCheckpoint(
-        dirpath=ckpt_dir,
-        filename=args.model + "-{epoch:02d}-{val_loss:.2f}",
-        monitor="val_loss",
-        mode="min",
-        save_top_k=1,
-        save_last=True,
-    )
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
-
-    callbacks = [checkpoint_callback, lr_monitor]
+    callbacks = [lr_monitor]
 
     if is_dino and not args.ssl_lejepa:
-        knn_checkpoint_callback = ModelCheckpoint(
+        linprobe_checkpoint_callback = ModelCheckpoint(
             dirpath=ckpt_dir,
-            filename=args.model + "-best-knn-{epoch:02d}-{val_knn_acc:.4f}",
-            monitor="val_knn_acc",
+            filename=args.model + "-best-linprobe-traincat-{epoch:02d}-{val_linprobe_traincat_top1:.4f}",
+            monitor="val_linprobe_traincat_top1",
             mode="max",
             save_top_k=1,
-            save_last=False,
+            save_last=True,
         )
-        callbacks.append(knn_checkpoint_callback)
+        callbacks.append(linprobe_checkpoint_callback)
+    else:
+        # No linear-probe metric available (VAE / LeJEPA): keep only the last epoch.
+        callbacks.append(ModelCheckpoint(dirpath=ckpt_dir, save_last=True, save_top_k=0))
 
     # Trainer
     # Parse --devices: "auto" stays as-is; comma-separated digits become a
