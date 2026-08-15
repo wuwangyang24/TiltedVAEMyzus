@@ -674,20 +674,11 @@ class ContrastiveDataModule(pl.LightningDataModule):
         )
 
     def val_dataloader(self) -> DataLoader:
-        if self.use_pk_sampler:
-            batch_sampler = PKBatchSampler(
-                labels=self._val_labels,
-                classes_per_batch=self.classes_per_batch,
-                samples_per_class=self.samples_per_class,
-                seed=self.seed,
-            )
-            return DataLoader(
-                self.val_dataset,
-                batch_sampler=batch_sampler,
-                num_workers=self.num_workers,
-                pin_memory=True,
-                persistent_workers=self.num_workers > 0,
-            )
+        # Always use a plain full-coverage loader for validation. The PK sampler
+        # oversamples small classes with replacement (duplicate images) and
+        # restricts each batch to a few classes, which trivially inflates the
+        # leave-one-out val_knn_acc. Evaluating every unique image once against
+        # all classes gives an honest metric.
         return DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
@@ -909,20 +900,11 @@ class InatDataModule(pl.LightningDataModule):
         )
 
     def val_dataloader(self) -> DataLoader:
-        if self.use_pk_sampler:
-            batch_sampler = PKBatchSampler(
-                labels=self._val_labels,
-                classes_per_batch=self.classes_per_batch,
-                samples_per_class=self.samples_per_class,
-                seed=self.seed,
-            )
-            return DataLoader(
-                self.val_dataset,
-                batch_sampler=batch_sampler,
-                num_workers=self.num_workers,
-                pin_memory=True,
-                persistent_workers=self.num_workers > 0,
-            )
+        # Always use a plain full-coverage loader for validation. The PK sampler
+        # oversamples small classes with replacement (duplicate images) and
+        # restricts each batch to a few classes, which trivially inflates the
+        # leave-one-out val_knn_acc. Evaluating every unique image once against
+        # all classes gives an honest metric.
         return DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
