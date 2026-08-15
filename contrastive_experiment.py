@@ -35,6 +35,7 @@ class ContrastiveExperiment(pl.LightningModule):
                  contrastive_sigreg_loss: bool = False,
                  dcl_sigreg_loss: bool = False,
                  dcl_soft_pos_loss: bool = False,
+                 vanilla_dcl: bool = False,
                  sigreg_weight: float = 0.1,
                  sigreg_slices: int = 512) -> None:
         super().__init__()
@@ -49,6 +50,7 @@ class ContrastiveExperiment(pl.LightningModule):
         self.contrastive_sigreg_loss = contrastive_sigreg_loss
         self.dcl_sigreg_loss = dcl_sigreg_loss
         self.dcl_soft_pos_loss = dcl_soft_pos_loss
+        self.vanilla_dcl = vanilla_dcl
         self.sigreg_weight = sigreg_weight
         self.sigreg_slices = sigreg_slices
         self.save_hyperparameters(ignore=["model"])
@@ -84,6 +86,10 @@ class ContrastiveExperiment(pl.LightningModule):
                 embeddings, labels, temperature=self.temperature,
                 sigreg_weight=self.sigreg_weight,
                 sigreg_slices=self.sigreg_slices)
+        elif self.vanilla_dcl:
+            embeddings = self.model(images)
+            loss_dict = self.model.vanilla_dcl_loss_function(
+                embeddings, labels, temperature=self.temperature)
         else:
             embeddings = self.model(images)
             loss_dict = self.model.loss_function(

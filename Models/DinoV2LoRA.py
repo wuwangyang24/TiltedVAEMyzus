@@ -9,6 +9,7 @@ from torch.nn import functional as F
 from Loss import (
     infonce_loss, contrastive_sigreg_loss, DCLSIGRegLoss, DCLSoftPosLoss,
     lejepa_loss, sigreg_loss, batch_knn_accuracy, gaussianity_metrics,
+    vanilla_dcl_loss,
 )
 
 try:
@@ -229,6 +230,12 @@ class DinoV2LoRA(nn.Module):
         self, embeddings: Tensor, labels: Tensor, **kwargs,
     ) -> Dict[str, Tensor]:
         return self.dcl_soft_pos_loss(embeddings, labels, **kwargs)
+
+    def vanilla_dcl_loss_function(
+        self, embeddings: Tensor, labels: Tensor, **kwargs,
+    ) -> Dict[str, Tensor]:
+        kwargs.setdefault("temperature", self.temperature)
+        return vanilla_dcl_loss(embeddings, labels, **kwargs)
 
     def lejepa_loss_function(self, view_embeddings: Tensor,
                              **kwargs) -> Dict[str, Tensor]:

@@ -158,6 +158,9 @@ def parse_args() -> argparse.Namespace:
                         help="Use DCL with similarity-weighted positives: positive "
                              "pairs that are more similar get larger weight, forming "
                              "tighter sub-clusters. Negatives are plain DCL.")
+    parser.add_argument("--vanilla_dcl", action="store_true",
+                        help="Use the plain Decoupled Contrastive Loss (no SIGReg, no "
+                             "suspicion re-weighting): supervised single-view DCL.")
     parser.add_argument("--dcl_soft_pos_tau", type=float, default=0.1,
                         help="Temperature for the positive-pair softmax weighting. "
                              "Lower values concentrate weight on closest positives. "
@@ -392,6 +395,7 @@ def main() -> None:
                 contrastive_sigreg_loss=args.contrastive_sigreg_loss,
                 dcl_sigreg_loss=args.dcl_sigreg_loss,
                 dcl_soft_pos_loss=args.dcl_soft_pos_loss,
+                vanilla_dcl=args.vanilla_dcl,
                 sigreg_weight=args.sigreg_weight,
                 sigreg_slices=args.sigreg_slices,
             )
@@ -470,6 +474,7 @@ def main() -> None:
                 susp_tag = ""
             dcl_tag = f"_DCL{dcl_variant}-SIGReg{args.sigreg_weight}{susp_tag}" if args.dcl_sigreg_loss else ""
             softpos_tag = f"_DCLSoftPos-Tau{args.dcl_soft_pos_tau}{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}-SIGReg{args.sigreg_weight}" if args.dcl_soft_pos_loss else ""
+            vanilla_dcl_tag = "_VanillaDCL" if args.vanilla_dcl else ""
             ckpt_suffix = (
                 f"DINO_LoRA_{targets_tag}"
                 f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
@@ -480,6 +485,7 @@ def main() -> None:
                 f"{sigreg_tag}"
                 f"{dcl_tag}"
                 f"{softpos_tag}"
+                f"{vanilla_dcl_tag}"
                 f"{dataset_tag}"
             )
     else:
