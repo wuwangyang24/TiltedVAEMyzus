@@ -544,6 +544,19 @@ def main() -> None:
         deterministic=args.deterministic,
     )
 
+    # For DCL soft-positive training, evaluate the val accuracy test on the
+    # untrained backbone first so we have a pre-training baseline to compare
+    # the fine-tuned adapters against.
+    if is_dino and not args.ssl_lejepa and args.dcl_soft_pos_loss:
+        baseline_results = trainer.validate(experiment, datamodule=datamodule, verbose=False)
+        if baseline_results:
+            baseline_metrics = {
+                f"baseline_{key}": value
+                for key, value in baseline_results[0].items()
+            }
+            wandb_logger.log_metrics(baseline_metrics)
+            print(f"[dcl_soft_pos] Pre-training backbone baseline: {baseline_metrics}")
+
     trainer.fit(experiment, datamodule=datamodule)
 
 
