@@ -28,6 +28,7 @@ def infonce_softpos_loss(embeddings: Tensor, labels: Tensor,
                          pos_weight_tau: float = 0.1,
                          sinkhorn: bool = False,
                          sinkhorn_iters: int = 5,
+                         test_labels: Tensor = None,
                          **kwargs) -> Dict[str, Tensor]:
     """Supervised InfoNCE / SupCon with soft (similarity-weighted) positives.
 
@@ -41,6 +42,8 @@ def infonce_softpos_loss(embeddings: Tensor, labels: Tensor,
         sinkhorn: if True, use Sinkhorn-Knopp iterations for a doubly-stochastic
             positive-weight matrix instead of per-row softmax.
         sinkhorn_iters: number of Sinkhorn-Knopp iterations.
+        test_labels: optional (N,) evaluation (``test_cat``) labels, used only
+            for monitoring whether positive-pair weights align with test_cat.
 
     Returns a dict with the scalar ``loss`` and monitoring metrics.
     """
@@ -91,4 +94,16 @@ def infonce_softpos_loss(embeddings: Tensor, labels: Tensor,
             "pos_fraction": valid.float().mean(),
             **knn_accs,
         }
+
+        # Alignment of positive-pair weights with the test_cat taxonomy:
+        # do same-test_cat positives receive more weight than diff-test_cat ones?
+        if test_labels is not None:
+            tl = test_labels.view(-1, 1)
+            same_test_pos = pos_mask * torch.eq(tl, tl.t()).float()
+            diff_test_pos = pos_mask * torch.ne(tl, tl.t()).float()
+            w_same = (pos_weights * same_test_pos).sum() / same_test_pos.sum().clamp(min=1)
+            w_diff = (pos_weights * diff_test_pos).sum() / diff_test_pos.sum().clamp(min=1)
+            metrics["pos_weight_same_testcat"] = w_same
+            metrics["pos_weight_diff_testcat"] = w_diff
+            metrics["pos_weight_testcat_ratio"] = w_same / w_diff.clamp(min=1e-12)
     return {"loss": loss, **metrics}

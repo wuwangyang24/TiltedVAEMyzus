@@ -103,7 +103,8 @@ class ContrastiveExperiment(pl.LightningModule):
             loss_dict = self.model.infonce_softpos_loss_function(
                 embeddings, labels, temperature=self.temperature,
                 pos_weight_tau=self.pos_weight_tau,
-                sinkhorn=self.sinkhorn, sinkhorn_iters=self.sinkhorn_iters)
+                sinkhorn=self.sinkhorn, sinkhorn_iters=self.sinkhorn_iters,
+                test_labels=test_labels)
         else:
             embeddings = self.model(images)
             loss_dict = self.model.loss_function(
@@ -117,7 +118,9 @@ class ContrastiveExperiment(pl.LightningModule):
             "train_loss", loss_dict["loss"],
             on_step=True, on_epoch=True, prog_bar=True,
         )
-        for key in ("suspicion_mean", "suspicion_same_testcat", "suspicion_diff_testcat"):
+        for key in ("suspicion_mean", "suspicion_same_testcat", "suspicion_diff_testcat",
+                    "pos_weight_same_testcat", "pos_weight_diff_testcat",
+                    "pos_weight_testcat_ratio"):
             if key in loss_dict:
                 self.log(f"train_{key}", loss_dict[key], on_step=True, on_epoch=True)
         return loss_dict["loss"]
@@ -133,6 +136,11 @@ class ContrastiveExperiment(pl.LightningModule):
             "val_loss", loss_dict["loss"],
             on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
         )
+        for key in ("pos_weight_same_testcat", "pos_weight_diff_testcat",
+                    "pos_weight_testcat_ratio"):
+            if key in loss_dict:
+                self.log(f"val_{key}", loss_dict[key], on_step=False, on_epoch=True,
+                         sync_dist=True)
         if test_labels is not None:
             self._val_embeddings.append(embeddings.detach().cpu())
             self._val_train_labels.append(train_labels.detach().view(-1).cpu())
