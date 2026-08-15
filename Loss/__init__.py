@@ -1,4 +1,5 @@
 from .infonce import infonce_loss
+from .infonce_softpos import infonce_softpos_loss
 from .contrastive_sigreg import contrastive_sigreg_loss
 from .dcl_sigreg import DCLSIGRegLoss
 from .dcl_soft_pos import DCLSoftPosLoss
@@ -8,6 +9,7 @@ from .utils import sigreg_loss, batch_knn_accuracy, gaussianity_metrics
 
 __all__ = [
     "infonce_loss",
+    "infonce_softpos_loss",
     "contrastive_sigreg_loss",
     "DCLSIGRegLoss",
     "DCLSoftPosLoss",

@@ -161,6 +161,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vanilla_dcl", action="store_true",
                         help="Use the plain Decoupled Contrastive Loss (no SIGReg, no "
                              "suspicion re-weighting): supervised single-view DCL.")
+    parser.add_argument("--infonce_softpos", action="store_true",
+                        help="Use InfoNCE/SupCon with similarity-weighted positives "
+                             "(same soft-positive scheme as --dcl_soft_pos_loss, but "
+                             "with the coupled InfoNCE denominator and no SIGReg).")
+    parser.add_argument("--pos_weight_tau", type=float, default=0.1,
+                        help="Temperature for the positive-pair softmax weighting in "
+                             "--infonce_softpos (lower = more weight on closest "
+                             "positives). Default: 0.1")
     parser.add_argument("--dcl_soft_pos_tau", type=float, default=0.1,
                         help="Temperature for the positive-pair softmax weighting. "
                              "Lower values concentrate weight on closest positives. "
@@ -396,6 +404,10 @@ def main() -> None:
                 dcl_sigreg_loss=args.dcl_sigreg_loss,
                 dcl_soft_pos_loss=args.dcl_soft_pos_loss,
                 vanilla_dcl=args.vanilla_dcl,
+                infonce_softpos=args.infonce_softpos,
+                pos_weight_tau=args.pos_weight_tau,
+                sinkhorn=args.sinkhorn,
+                sinkhorn_iters=args.sinkhorn_iters,
                 sigreg_weight=args.sigreg_weight,
                 sigreg_slices=args.sigreg_slices,
             )
@@ -475,6 +487,10 @@ def main() -> None:
             dcl_tag = f"_DCL{dcl_variant}-SIGReg{args.sigreg_weight}{susp_tag}" if args.dcl_sigreg_loss else ""
             softpos_tag = f"_DCLSoftPos-Tau{args.dcl_soft_pos_tau}{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}-SIGReg{args.sigreg_weight}" if args.dcl_soft_pos_loss else ""
             vanilla_dcl_tag = "_VanillaDCL" if args.vanilla_dcl else ""
+            infonce_softpos_tag = (
+                f"_InfoNCESoftPos-Tau{args.pos_weight_tau}"
+                f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
+            ) if args.infonce_softpos else ""
             ckpt_suffix = (
                 f"DINO_LoRA_{targets_tag}"
                 f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
@@ -486,6 +502,7 @@ def main() -> None:
                 f"{dcl_tag}"
                 f"{softpos_tag}"
                 f"{vanilla_dcl_tag}"
+                f"{infonce_softpos_tag}"
                 f"{dataset_tag}"
             )
     else:
