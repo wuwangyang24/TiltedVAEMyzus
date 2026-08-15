@@ -471,6 +471,7 @@ def main() -> None:
             ckpt_suffix = (
                 f"DINO_LoRA_{targets_tag}"
                 f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
+                f"_BS{args.batch_size}"
                 f"_{proj_tag}"
                 f"_LeJEPA_Views{args.ssl_views}_SW{args.sigreg_weight}"
                 f"{cv_tag}{aug_tag}"
@@ -494,7 +495,7 @@ def main() -> None:
             ckpt_suffix = (
                 f"DINO_LoRA_{targets_tag}"
                 f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
-                f"_P{p_val}_K{k_val}"
+                f"_P{p_val}_K{k_val}_BS{args.batch_size}"
                 f"_{proj_tag}"
                 f"_T{args.temperature}"
                 f"{level_tag}"
@@ -506,7 +507,7 @@ def main() -> None:
                 f"{dataset_tag}"
             )
     else:
-        ckpt_suffix = f"{args.model}-latent{args.latent_dim}-kld{args.kld_weight}"
+        ckpt_suffix = f"{args.model}-latent{args.latent_dim}-kld{args.kld_weight}-BS{args.batch_size}"
         if args.weak_sigreg_weight > 0:
             ckpt_suffix += f"-weaksigreg{args.weak_sigreg_weight}"
 
