@@ -517,15 +517,17 @@ def main() -> None:
     resume_ckpt = os.path.join(ckpt_dir, "last.ckpt")
     resume_from = resume_ckpt if os.path.exists(resume_ckpt) else None
 
-    # Derive a deterministic W&B run id from the config so the same
-    # configuration always maps to the same run. With resume="allow" this
-    # resumes the existing run (continuing its logs) when one exists, and
-    # otherwise starts it fresh -- no side-file that has to survive is needed.
-    wandb_run_id = hashlib.sha1(
-        f"{args.project}/{args.run_name or ckpt_suffix}".encode()
-    ).hexdigest()[:16]
+    # Only pin a deterministic W&B run id when we are actually resuming from a
+    # checkpoint, so the resumed training continues logging to the same run.
+    # When starting fresh we let W&B generate a new id: reusing a fixed id fails
+    # if that id was previously created and then deleted on the W&B server.
     if resume_from is not None:
+        wandb_run_id = hashlib.sha1(
+            f"{args.project}/{args.run_name or ckpt_suffix}".encode()
+        ).hexdigest()[:16]
         print(f"[resume] Found {resume_ckpt}; resuming W&B run {wandb_run_id}")
+    else:
+        wandb_run_id = None
 
     # Logger (Weights & Biases)
     wandb_logger = WandbLogger(
