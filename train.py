@@ -511,6 +511,19 @@ def main() -> None:
         if args.weak_sigreg_weight > 0:
             ckpt_suffix += f"-weaksigreg{args.weak_sigreg_weight}"
 
+    # Resume from a previous run if a `last.ckpt` already exists for this config.
+    ckpt_dir = os.path.join(args.output_dir, "checkpoints", ckpt_suffix)
+    resume_ckpt = os.path.join(ckpt_dir, "last.ckpt")
+    wandb_id_file = os.path.join(ckpt_dir, "wandb_run_id.txt")
+    resume_from = resume_ckpt if os.path.exists(resume_ckpt) else None
+
+    # Reuse the same W&B run when resuming so logging continues in one run.
+    wandb_run_id = None
+    if resume_from is not None and os.path.exists(wandb_id_file):
+        with open(wandb_id_file) as f:
+            wandb_run_id = f.read().strip() or None
+        print(f"[resume] Found {resume_ckpt}; resuming W&B run {wandb_run_id}")
+
     # Logger (Weights & Biases)
     wandb_logger = WandbLogger(
         project=args.project,
@@ -519,11 +532,18 @@ def main() -> None:
         tags=args.tags,
         save_dir=args.output_dir,
         log_model=False,
+        id=wandb_run_id,
+        resume="must" if wandb_run_id else None,
     )
     wandb_logger.log_hyperparams(vars(args))
 
+    # Persist the W&B run id so a later run can resume the same one.
+    os.makedirs(ckpt_dir, exist_ok=True)
+    if not os.path.exists(wandb_id_file):
+        with open(wandb_id_file, "w") as f:
+            f.write(str(wandb_logger.experiment.id))
+
     # Callbacks
-    ckpt_dir = os.path.join(args.output_dir, "checkpoints", ckpt_suffix)
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
     callbacks = [lr_monitor]
 
@@ -562,7 +582,7 @@ def main() -> None:
         deterministic=args.deterministic,
     )
 
-    trainer.fit(experiment, datamodule=datamodule)
+    trainer.fit(experiment, datamodule=datamodule, ckpt_path=resume_from)
 
 
 if __name__ == "__main__":
