@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import os
 
 import torch
@@ -514,14 +515,16 @@ def main() -> None:
     # Resume from a previous run if a `last.ckpt` already exists for this config.
     ckpt_dir = os.path.join(args.output_dir, "checkpoints", ckpt_suffix)
     resume_ckpt = os.path.join(ckpt_dir, "last.ckpt")
-    wandb_id_file = os.path.join(ckpt_dir, "wandb_run_id.txt")
     resume_from = resume_ckpt if os.path.exists(resume_ckpt) else None
 
-    # Reuse the same W&B run when resuming so logging continues in one run.
-    wandb_run_id = None
-    if resume_from is not None and os.path.exists(wandb_id_file):
-        with open(wandb_id_file) as f:
-            wandb_run_id = f.read().strip() or None
+    # Derive a deterministic W&B run id from the config so the same
+    # configuration always maps to the same run. With resume="allow" this
+    # resumes the existing run (continuing its logs) when one exists, and
+    # otherwise starts it fresh -- no side-file that has to survive is needed.
+    wandb_run_id = hashlib.sha1(
+        f"{args.project}/{args.run_name or ckpt_suffix}".encode()
+    ).hexdigest()[:16]
+    if resume_from is not None:
         print(f"[resume] Found {resume_ckpt}; resuming W&B run {wandb_run_id}")
 
     # Logger (Weights & Biases)
@@ -533,15 +536,9 @@ def main() -> None:
         save_dir=args.output_dir,
         log_model=False,
         id=wandb_run_id,
-        resume="must" if wandb_run_id else None,
+        resume="allow",
     )
     wandb_logger.log_hyperparams(vars(args))
-
-    # Persist the W&B run id so a later run can resume the same one.
-    os.makedirs(ckpt_dir, exist_ok=True)
-    if not os.path.exists(wandb_id_file):
-        with open(wandb_id_file, "w") as f:
-            f.write(str(wandb_logger.experiment.id))
 
     # Callbacks
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
