@@ -159,6 +159,15 @@ def parse_args() -> argparse.Namespace:
                         help="Use DCL with similarity-weighted positives: positive "
                              "pairs that are more similar get larger weight, forming "
                              "tighter sub-clusters. Negatives are plain DCL.")
+    parser.add_argument("--supcon_soft_pos_loss", action="store_true",
+                        help="Use supervised contrastive (SupCon) loss with "
+                             "similarity-weighted positives (same soft-positive "
+                             "scheme as --dcl_soft_pos_loss, but with the coupled "
+                             "SupCon denominator plus SIGReg regularization).")
+    parser.add_argument("--supcon_soft_pos_tau", type=float, default=0.1,
+                        help="Temperature for the positive-pair softmax weighting in "
+                             "--supcon_soft_pos_loss (lower = more weight on closest "
+                             "positives). Default: 0.1")
     parser.add_argument("--vanilla_dcl", action="store_true",
                         help="Use the plain Decoupled Contrastive Loss (no SIGReg, no "
                              "suspicion re-weighting): supervised single-view DCL.")
@@ -374,6 +383,8 @@ def main() -> None:
             dcl_normal=args.normal_dcl,
             dcl_soft_pos=args.dcl_soft_pos_loss,
             dcl_soft_pos_tau=args.dcl_soft_pos_tau,
+            supcon_soft_pos=args.supcon_soft_pos_loss,
+            supcon_soft_pos_tau=args.supcon_soft_pos_tau,
             sinkhorn=args.sinkhorn,
             sinkhorn_iters=args.sinkhorn_iters,
         )
@@ -406,6 +417,8 @@ def main() -> None:
                 dcl_soft_pos_loss=args.dcl_soft_pos_loss,
                 vanilla_dcl=args.vanilla_dcl,
                 infonce_softpos=args.infonce_softpos,
+                supcon_softpos=args.supcon_soft_pos_loss,
+                supcon_soft_pos_tau=args.supcon_soft_pos_tau,
                 pos_weight_tau=args.pos_weight_tau,
                 sinkhorn=args.sinkhorn,
                 sinkhorn_iters=args.sinkhorn_iters,
@@ -493,6 +506,11 @@ def main() -> None:
                 f"_InfoNCESoftPos-Tau{args.pos_weight_tau}"
                 f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
             ) if args.infonce_softpos else ""
+            supcon_softpos_tag = (
+                f"_SupConSoftPos-Tau{args.supcon_soft_pos_tau}"
+                f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
+                f"-SIGReg{args.sigreg_weight}"
+            ) if args.supcon_soft_pos_loss else ""
             ckpt_suffix = (
                 f"DINO_LoRA_{targets_tag}"
                 f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
@@ -505,6 +523,7 @@ def main() -> None:
                 f"{softpos_tag}"
                 f"{vanilla_dcl_tag}"
                 f"{infonce_softpos_tag}"
+                f"{supcon_softpos_tag}"
                 f"{dataset_tag}"
             )
     else:
