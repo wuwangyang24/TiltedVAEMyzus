@@ -46,12 +46,14 @@ class SupConSoftPosLoss(nn.Module):
     def forward(self, embeddings: Tensor, labels: Tensor,
                 sigreg_weight: float = 0.1,
                 temperature: float = 0.1,
+                pos_weight_tau: Optional[float] = None,
                 sigreg_slices: int = 512,
                 sigreg_num_freqs: int = 33,
                 sigreg_t_max: float = 8.0,
                 test_labels: Optional[Tensor] = None,
                 **kwargs) -> Dict[str, Tensor]:
         temperature = kwargs.get("temperature", temperature)
+        pos_weight_tau = self.pos_weight_tau if pos_weight_tau is None else pos_weight_tau
         device = embeddings.device
         n, d = embeddings.shape
         labels_flat = labels.view(-1).long()
@@ -76,7 +78,7 @@ class SupConSoftPosLoss(nn.Module):
 
         # --- Soft positive weights (same scheme as DCLSoftPos) ---
         raw_cos = normed @ normed.t()
-        pos_weight_logits = raw_cos / self.pos_weight_tau
+        pos_weight_logits = raw_cos / pos_weight_tau
         if self.sinkhorn:
             pos_weights = pos_weight_logits.exp() * pos_mask
             pos_weights = sinkhorn_normalize(pos_weights, self.sinkhorn_iters)

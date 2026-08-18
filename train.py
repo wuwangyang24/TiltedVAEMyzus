@@ -168,6 +168,15 @@ def parse_args() -> argparse.Namespace:
                         help="Temperature for the positive-pair softmax weighting in "
                              "--supcon_soft_pos_loss (lower = more weight on closest "
                              "positives). Default: 0.1")
+    parser.add_argument("--tau_annealing", action="store_true",
+                        help="Cosine-anneal the SupCon soft-positive temperature from "
+                             "--supcon_tau_start to --supcon_tau_end over training.")
+    parser.add_argument("--supcon_tau_start", type=float, default=0.1,
+                        help="Initial SupCon soft-positive temperature when "
+                             "--tau_annealing is enabled. Default: 0.1")
+    parser.add_argument("--supcon_tau_end", type=float, default=0.1,
+                        help="Final SupCon soft-positive temperature when "
+                             "--tau_annealing is enabled. Default: 0.1")
     parser.add_argument("--vanilla_dcl", action="store_true",
                         help="Use the plain Decoupled Contrastive Loss (no SIGReg, no "
                              "suspicion re-weighting): supervised single-view DCL.")
@@ -424,6 +433,9 @@ def main() -> None:
                 infonce_softpos=args.infonce_softpos,
                 supcon_softpos=args.supcon_soft_pos_loss,
                 supcon_soft_pos_tau=args.supcon_soft_pos_tau,
+                tau_annealing=args.tau_annealing,
+                supcon_tau_start=args.supcon_tau_start,
+                supcon_tau_end=args.supcon_tau_end,
                 pos_weight_tau=args.pos_weight_tau,
                 sinkhorn=args.sinkhorn,
                 sinkhorn_iters=args.sinkhorn_iters,
@@ -513,7 +525,7 @@ def main() -> None:
                 f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
             ) if args.infonce_softpos else ""
             supcon_softpos_tag = (
-                f"_SupConSoftPos-Tau{args.supcon_soft_pos_tau}"
+                f"_SupConSoftPos-{'CosTau' + str(args.supcon_tau_start) + 'to' + str(args.supcon_tau_end) if args.tau_annealing else 'Tau' + str(args.supcon_soft_pos_tau)}"
                 f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
                 f"-SIGReg{args.sigreg_weight}"
             ) if args.supcon_soft_pos_loss else ""

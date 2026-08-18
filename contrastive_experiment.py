@@ -1,3 +1,4 @@
+import math
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
@@ -41,6 +42,9 @@ class ContrastiveExperiment(pl.LightningModule):
                  vanilla_supcon: bool = False,
                  pos_weight_tau: float = 0.1,
                  supcon_soft_pos_tau: float = 0.1,
+                 tau_annealing: bool = False,
+                 supcon_tau_start: float = 0.1,
+                 supcon_tau_end: float = 0.1,
                  sinkhorn: bool = False,
                  sinkhorn_iters: int = 5,
                  sigreg_weight: float = 0.1,
@@ -63,6 +67,9 @@ class ContrastiveExperiment(pl.LightningModule):
         self.vanilla_supcon = vanilla_supcon
         self.pos_weight_tau = pos_weight_tau
         self.supcon_soft_pos_tau = supcon_soft_pos_tau
+        self.tau_annealing = tau_annealing
+        self.supcon_tau_start = supcon_tau_start
+        self.supcon_tau_end = supcon_tau_end
         self.sinkhorn = sinkhorn
         self.sinkhorn_iters = sinkhorn_iters
         self.sigreg_weight = sigreg_weight
@@ -71,6 +78,15 @@ class ContrastiveExperiment(pl.LightningModule):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
+
+    def _current_supcon_tau(self) -> float:
+        if not self.tau_annealing:
+            return self.supcon_soft_pos_tau
+        progress = min(self.current_epoch / max(self.max_epochs - 1, 1), 1.0)
+        cosine_progress = 0.5 * (1.0 - math.cos(math.pi * progress))
+        return self.supcon_tau_start + (
+            self.supcon_tau_end - self.supcon_tau_start
+        ) * cosine_progress
 
     def _step(self, batch: Any) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         # Support both (images, labels) and (images, train_labels, test_labels)
@@ -117,8 +133,10 @@ class ContrastiveExperiment(pl.LightningModule):
                 test_labels=test_labels)
         elif self.supcon_softpos:
             embeddings = self.model(images, normalize=False)
+            supcon_tau = self._current_supcon_tau()
             loss_dict = self.model.supcon_soft_pos_loss_function(
                 embeddings, labels, temperature=self.temperature,
+                pos_weight_tau=supcon_tau,
                 sigreg_weight=self.sigreg_weight,
                 sigreg_slices=self.sigreg_slices,
                 test_labels=test_labels)
@@ -131,6 +149,9 @@ class ContrastiveExperiment(pl.LightningModule):
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         loss_dict, _, _, _ = self._step(batch)
+        if self.supcon_softpos:
+            self.log("train_supcon_tau", self._current_supcon_tau(),
+                     on_step=False, on_epoch=True)
         self.log(
             "train_loss", loss_dict["loss"],
             on_step=True, on_epoch=True, prog_bar=True,
