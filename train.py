@@ -169,7 +169,7 @@ def parse_args() -> argparse.Namespace:
                              "--supcon_soft_pos_loss (lower = more weight on closest "
                              "positives). Default: 0.1")
     parser.add_argument("--tau_annealing", action="store_true",
-                        help="Cosine-anneal the SupCon soft-positive temperature from "
+                        help="Linearly anneal the SupCon soft-positive temperature from "
                              "--supcon_tau_start to --supcon_tau_end over training.")
     parser.add_argument("--supcon_tau_start", type=float, default=0.1,
                         help="Initial SupCon soft-positive temperature when "
@@ -525,7 +525,7 @@ def main() -> None:
                 f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
             ) if args.infonce_softpos else ""
             supcon_softpos_tag = (
-                f"_SupConSoftPos-{'CosTau' + str(args.supcon_tau_start) + 'to' + str(args.supcon_tau_end) if args.tau_annealing else 'Tau' + str(args.supcon_soft_pos_tau)}"
+                f"_SupConSoftPos-{'LinearTau' + str(args.supcon_tau_start) + 'to' + str(args.supcon_tau_end) if args.tau_annealing else 'Tau' + str(args.supcon_soft_pos_tau)}"
                 f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
                 f"-SIGReg{args.sigreg_weight}"
             ) if args.supcon_soft_pos_loss else ""

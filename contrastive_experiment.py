@@ -1,4 +1,3 @@
-import math
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
@@ -83,10 +82,9 @@ class ContrastiveExperiment(pl.LightningModule):
         if not self.tau_annealing:
             return self.supcon_soft_pos_tau
         progress = min(self.current_epoch / max(self.max_epochs - 1, 1), 1.0)
-        cosine_progress = 0.5 * (1.0 - math.cos(math.pi * progress))
         return self.supcon_tau_start + (
             self.supcon_tau_end - self.supcon_tau_start
-        ) * cosine_progress
+        ) * progress
 
     def _step(self, batch: Any) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         # Support both (images, labels) and (images, train_labels, test_labels)
