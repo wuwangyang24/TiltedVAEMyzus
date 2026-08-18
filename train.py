@@ -179,7 +179,8 @@ def parse_args() -> argparse.Namespace:
                              "--tau_annealing is enabled. Default: 0.1")
     parser.add_argument("--no_pos_weight_epoch", type=int, default=0,
                         help="Number of initial epochs that use uniform positive "
-                             "weights before SupCon soft-positive weighting starts. "
+                            "weights before SupCon/InfoNCE soft-positive weighting "
+                            "starts. "
                              "Default: 0")
     parser.add_argument("--vanilla_dcl", action="store_true",
                         help="Use the plain Decoupled Contrastive Loss (no SIGReg, no "
@@ -527,6 +528,7 @@ def main() -> None:
             vanilla_supcon_tag = "_VanillaSupCon" if args.vanilla_supcon else ""
             infonce_softpos_tag = (
                 f"_InfoNCESoftPos-Tau{args.pos_weight_tau}"
+                f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
                 f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
             ) if args.infonce_softpos else ""
             supcon_softpos_tag = (

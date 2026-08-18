@@ -92,7 +92,7 @@ class ContrastiveExperiment(pl.LightningModule):
             self.supcon_tau_end - self.supcon_tau_start
         ) * progress
 
-    def _use_supcon_pos_weighting(self) -> bool:
+    def _use_pos_weighting(self) -> bool:
         return self.current_epoch >= self.no_pos_weight_epoch
 
     def _step(self, batch: Any) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
@@ -136,6 +136,7 @@ class ContrastiveExperiment(pl.LightningModule):
             loss_dict = self.model.infonce_softpos_loss_function(
                 embeddings, labels, temperature=self.temperature,
                 pos_weight_tau=self.pos_weight_tau,
+                use_pos_weighting=self._use_pos_weighting(),
                 sinkhorn=self.sinkhorn, sinkhorn_iters=self.sinkhorn_iters,
                 test_labels=test_labels)
         elif self.supcon_softpos:
@@ -144,7 +145,7 @@ class ContrastiveExperiment(pl.LightningModule):
             loss_dict = self.model.supcon_soft_pos_loss_function(
                 embeddings, labels, temperature=self.temperature,
                 pos_weight_tau=supcon_tau,
-                use_pos_weighting=self._use_supcon_pos_weighting(),
+                use_pos_weighting=self._use_pos_weighting(),
                 sigreg_weight=self.sigreg_weight,
                 sigreg_slices=self.sigreg_slices,
                 test_labels=test_labels)
@@ -160,7 +161,8 @@ class ContrastiveExperiment(pl.LightningModule):
         if self.supcon_softpos:
             self.log("train_supcon_tau", self._current_supcon_tau(),
                      on_step=False, on_epoch=True)
-            self.log("train_pos_weight_active", float(self._use_supcon_pos_weighting()),
+        if self.supcon_softpos or self.infonce_softpos:
+            self.log("train_pos_weight_active", float(self._use_pos_weighting()),
                      on_step=False, on_epoch=True)
         self.log(
             "train_loss", loss_dict["loss"],

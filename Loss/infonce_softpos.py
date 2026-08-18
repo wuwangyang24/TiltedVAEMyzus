@@ -26,6 +26,7 @@ _SMALL_NUM = np.log(1e-45)
 def infonce_softpos_loss(embeddings: Tensor, labels: Tensor,
                          temperature: float = 0.1,
                          pos_weight_tau: float = 0.1,
+                         use_pos_weighting: bool = True,
                          sinkhorn: bool = False,
                          sinkhorn_iters: int = 5,
                          test_labels: Tensor = None,
@@ -39,6 +40,7 @@ def infonce_softpos_loss(embeddings: Tensor, labels: Tensor,
         pos_weight_tau: temperature of the softmax that turns positive-pair
             cosine similarities into weights (lower = sharper, more weight on
             the closest positives).
+        use_pos_weighting: if False, weight all positives uniformly.
         sinkhorn: if True, use Sinkhorn-Knopp iterations for a doubly-stochastic
             positive-weight matrix instead of per-row softmax.
         sinkhorn_iters: number of Sinkhorn-Knopp iterations.
@@ -68,14 +70,17 @@ def infonce_softpos_loss(embeddings: Tensor, labels: Tensor,
 
     # Soft positive weights from cosine similarity (same scheme as DCLSoftPos).
     raw_cos = embeddings @ embeddings.t()
-    pos_weight_logits = raw_cos / pos_weight_tau
-    if sinkhorn:
-        pos_weights = pos_weight_logits.exp() * pos_mask
-        pos_weights = sinkhorn_normalize(pos_weights, sinkhorn_iters)
-        pos_weights = pos_weights * pos_mask
+    if not use_pos_weighting:
+        pos_weights = pos_mask / pos_per_anchor.clamp(min=1).unsqueeze(1)
     else:
-        pos_weight_logits = pos_weight_logits + (1.0 - pos_mask) * _SMALL_NUM
-        pos_weights = F.softmax(pos_weight_logits, dim=1) * pos_mask
+        pos_weight_logits = raw_cos / pos_weight_tau
+        if sinkhorn:
+            pos_weights = pos_weight_logits.exp() * pos_mask
+            pos_weights = sinkhorn_normalize(pos_weights, sinkhorn_iters)
+            pos_weights = pos_weights * pos_mask
+        else:
+            pos_weight_logits = pos_weight_logits + (1.0 - pos_mask) * _SMALL_NUM
+            pos_weights = F.softmax(pos_weight_logits, dim=1) * pos_mask
 
     # Weighted log-likelihood over each anchor's positives.
     weighted_log_prob_pos = (pos_weights * log_prob).sum(dim=1)
