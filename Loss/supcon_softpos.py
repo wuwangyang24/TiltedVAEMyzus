@@ -70,6 +70,10 @@ class SupConSoftPosLoss(nn.Module):
         logits = normed @ normed.t() / temperature
         logits = logits - logits.max(dim=1, keepdim=True).values.detach()
 
+        # SupCon (coupled) denominator: all non-self samples.
+        exp_logits = torch.exp(logits) * (1.0 - self_mask)
+        log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-12)
+
         # --- Soft positive weights (same scheme as DCLSoftPos) ---
         raw_cos = normed @ normed.t()
         pos_weight_logits = raw_cos / self.pos_weight_tau
@@ -80,13 +84,6 @@ class SupConSoftPosLoss(nn.Module):
         else:
             pos_weight_logits = pos_weight_logits + (1.0 - pos_mask) * _SMALL_NUM
             pos_weights = F.softmax(pos_weight_logits, dim=1) * pos_mask
-
-        # SupCon (coupled) denominator: negatives at weight 1, positive terms
-        # re-weighted by the same soft positive weights.
-        neg_mask = (1.0 - self_mask - pos_mask).clamp(min=0.0)
-        denom_coeff = neg_mask + pos_weights
-        exp_logits = torch.exp(logits) * denom_coeff
-        log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-12)
 
         # Weighted log-likelihood over each anchor's positives.
         weighted_log_prob_pos = (pos_weights * log_prob).sum(dim=1)

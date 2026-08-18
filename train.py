@@ -171,6 +171,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vanilla_dcl", action="store_true",
                         help="Use the plain Decoupled Contrastive Loss (no SIGReg, no "
                              "suspicion re-weighting): supervised single-view DCL.")
+    parser.add_argument("--vanilla_supcon", action="store_true",
+                        help="Use the plain Supervised Contrastive (SupCon) loss (no "
+                             "SIGReg, no soft positives): supervised single-view "
+                             "SupCon with the coupled InfoNCE denominator.")
     parser.add_argument("--infonce_softpos", action="store_true",
                         help="Use InfoNCE/SupCon with similarity-weighted positives "
                              "(same soft-positive scheme as --dcl_soft_pos_loss, but "
@@ -416,6 +420,7 @@ def main() -> None:
                 dcl_sigreg_loss=args.dcl_sigreg_loss,
                 dcl_soft_pos_loss=args.dcl_soft_pos_loss,
                 vanilla_dcl=args.vanilla_dcl,
+                vanilla_supcon=args.vanilla_supcon,
                 infonce_softpos=args.infonce_softpos,
                 supcon_softpos=args.supcon_soft_pos_loss,
                 supcon_soft_pos_tau=args.supcon_soft_pos_tau,
@@ -502,6 +507,7 @@ def main() -> None:
             dcl_tag = f"_DCL{dcl_variant}-SIGReg{args.sigreg_weight}{susp_tag}" if args.dcl_sigreg_loss else ""
             softpos_tag = f"_DCLSoftPos-Tau{args.dcl_soft_pos_tau}{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}-SIGReg{args.sigreg_weight}" if args.dcl_soft_pos_loss else ""
             vanilla_dcl_tag = "_VanillaDCL" if args.vanilla_dcl else ""
+            vanilla_supcon_tag = "_VanillaSupCon" if args.vanilla_supcon else ""
             infonce_softpos_tag = (
                 f"_InfoNCESoftPos-Tau{args.pos_weight_tau}"
                 f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
@@ -522,6 +528,7 @@ def main() -> None:
                 f"{dcl_tag}"
                 f"{softpos_tag}"
                 f"{vanilla_dcl_tag}"
+                f"{vanilla_supcon_tag}"
                 f"{infonce_softpos_tag}"
                 f"{supcon_softpos_tag}"
                 f"{dataset_tag}"
