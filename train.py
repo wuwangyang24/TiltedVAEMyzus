@@ -177,6 +177,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--supcon_tau_end", type=float, default=0.1,
                         help="Final SupCon soft-positive temperature when "
                              "--tau_annealing is enabled. Default: 0.1")
+    parser.add_argument("--no_pos_weight_epoch", type=int, default=0,
+                        help="Number of initial epochs that use uniform positive "
+                             "weights before SupCon soft-positive weighting starts. "
+                             "Default: 0")
     parser.add_argument("--vanilla_dcl", action="store_true",
                         help="Use the plain Decoupled Contrastive Loss (no SIGReg, no "
                              "suspicion re-weighting): supervised single-view DCL.")
@@ -436,6 +440,7 @@ def main() -> None:
                 tau_annealing=args.tau_annealing,
                 supcon_tau_start=args.supcon_tau_start,
                 supcon_tau_end=args.supcon_tau_end,
+                no_pos_weight_epoch=args.no_pos_weight_epoch,
                 pos_weight_tau=args.pos_weight_tau,
                 sinkhorn=args.sinkhorn,
                 sinkhorn_iters=args.sinkhorn_iters,
@@ -526,6 +531,7 @@ def main() -> None:
             ) if args.infonce_softpos else ""
             supcon_softpos_tag = (
                 f"_SupConSoftPos-{'LinearTau' + str(args.supcon_tau_start) + 'to' + str(args.supcon_tau_end) if args.tau_annealing else 'Tau' + str(args.supcon_soft_pos_tau)}"
+                f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
                 f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
                 f"-SIGReg{args.sigreg_weight}"
             ) if args.supcon_soft_pos_loss else ""

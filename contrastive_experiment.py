@@ -44,6 +44,7 @@ class ContrastiveExperiment(pl.LightningModule):
                  tau_annealing: bool = False,
                  supcon_tau_start: float = 0.1,
                  supcon_tau_end: float = 0.1,
+                 no_pos_weight_epoch: int = 0,
                  sinkhorn: bool = False,
                  sinkhorn_iters: int = 5,
                  sigreg_weight: float = 0.1,
@@ -69,6 +70,9 @@ class ContrastiveExperiment(pl.LightningModule):
         self.tau_annealing = tau_annealing
         self.supcon_tau_start = supcon_tau_start
         self.supcon_tau_end = supcon_tau_end
+        if no_pos_weight_epoch < 0:
+            raise ValueError("no_pos_weight_epoch must be non-negative")
+        self.no_pos_weight_epoch = no_pos_weight_epoch
         self.sinkhorn = sinkhorn
         self.sinkhorn_iters = sinkhorn_iters
         self.sigreg_weight = sigreg_weight
@@ -81,10 +85,15 @@ class ContrastiveExperiment(pl.LightningModule):
     def _current_supcon_tau(self) -> float:
         if not self.tau_annealing:
             return self.supcon_soft_pos_tau
-        progress = min(self.current_epoch / max(self.max_epochs - 1, 1), 1.0)
+        weighted_epoch = max(self.current_epoch - self.no_pos_weight_epoch, 0)
+        weighted_epochs = max(self.max_epochs - self.no_pos_weight_epoch, 1)
+        progress = min(weighted_epoch / max(weighted_epochs - 1, 1), 1.0)
         return self.supcon_tau_start + (
             self.supcon_tau_end - self.supcon_tau_start
         ) * progress
+
+    def _use_supcon_pos_weighting(self) -> bool:
+        return self.current_epoch >= self.no_pos_weight_epoch
 
     def _step(self, batch: Any) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         # Support both (images, labels) and (images, train_labels, test_labels)
@@ -135,6 +144,7 @@ class ContrastiveExperiment(pl.LightningModule):
             loss_dict = self.model.supcon_soft_pos_loss_function(
                 embeddings, labels, temperature=self.temperature,
                 pos_weight_tau=supcon_tau,
+                use_pos_weighting=self._use_supcon_pos_weighting(),
                 sigreg_weight=self.sigreg_weight,
                 sigreg_slices=self.sigreg_slices,
                 test_labels=test_labels)
@@ -149,6 +159,8 @@ class ContrastiveExperiment(pl.LightningModule):
         loss_dict, _, _, _ = self._step(batch)
         if self.supcon_softpos:
             self.log("train_supcon_tau", self._current_supcon_tau(),
+                     on_step=False, on_epoch=True)
+            self.log("train_pos_weight_active", float(self._use_supcon_pos_weighting()),
                      on_step=False, on_epoch=True)
         self.log(
             "train_loss", loss_dict["loss"],

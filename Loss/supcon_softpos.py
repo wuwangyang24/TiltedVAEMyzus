@@ -47,6 +47,7 @@ class SupConSoftPosLoss(nn.Module):
                 sigreg_weight: float = 0.1,
                 temperature: float = 0.1,
                 pos_weight_tau: Optional[float] = None,
+                use_pos_weighting: bool = True,
                 sigreg_slices: int = 512,
                 sigreg_num_freqs: int = 33,
                 sigreg_t_max: float = 8.0,
@@ -78,14 +79,17 @@ class SupConSoftPosLoss(nn.Module):
 
         # --- Soft positive weights (same scheme as DCLSoftPos) ---
         raw_cos = normed @ normed.t()
-        pos_weight_logits = raw_cos / pos_weight_tau
-        if self.sinkhorn:
-            pos_weights = pos_weight_logits.exp() * pos_mask
-            pos_weights = sinkhorn_normalize(pos_weights, self.sinkhorn_iters)
-            pos_weights = pos_weights * pos_mask
+        if not use_pos_weighting:
+            pos_weights = pos_mask / pos_per_anchor.clamp(min=1).unsqueeze(1)
         else:
-            pos_weight_logits = pos_weight_logits + (1.0 - pos_mask) * _SMALL_NUM
-            pos_weights = F.softmax(pos_weight_logits, dim=1) * pos_mask
+            pos_weight_logits = raw_cos / pos_weight_tau
+            if self.sinkhorn:
+                pos_weights = pos_weight_logits.exp() * pos_mask
+                pos_weights = sinkhorn_normalize(pos_weights, self.sinkhorn_iters)
+                pos_weights = pos_weights * pos_mask
+            else:
+                pos_weight_logits = pos_weight_logits + (1.0 - pos_mask) * _SMALL_NUM
+                pos_weights = F.softmax(pos_weight_logits, dim=1) * pos_mask
 
         # Weighted log-likelihood over each anchor's positives.
         weighted_log_prob_pos = (pos_weights * log_prob).sum(dim=1)
