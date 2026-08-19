@@ -170,6 +170,10 @@ def parse_args() -> argparse.Namespace:
                         help="Temperature for the positive-pair softmax weighting in "
                              "--supcon_soft_pos_loss (lower = more weight on closest "
                              "positives). Default: 0.1")
+    parser.add_argument("--denominator_pos_weight", action="store_true",
+                        help="With --supcon_soft_pos_loss, also re-weight the positive "
+                             "terms inside the SupCon denominator by the soft positive "
+                             "weights (negatives stay at weight 1).")
     parser.add_argument("--tau_annealing", action="store_true",
                         help="Linearly anneal the SupCon soft-positive temperature from "
                              "--supcon_tau_start to --supcon_tau_end over training.")
@@ -404,6 +408,7 @@ def main() -> None:
                 dcl_soft_pos_tau=args.dcl_soft_pos_tau,
                 supcon_soft_pos=args.supcon_soft_pos_loss,
                 supcon_soft_pos_tau=args.supcon_soft_pos_tau,
+                supcon_denom_pos_weight=args.denominator_pos_weight,
                 sinkhorn=args.sinkhorn,
                 sinkhorn_iters=args.sinkhorn_iters,
             )
@@ -428,6 +433,7 @@ def main() -> None:
                 dcl_soft_pos_tau=args.dcl_soft_pos_tau,
                 supcon_soft_pos=args.supcon_soft_pos_loss,
                 supcon_soft_pos_tau=args.supcon_soft_pos_tau,
+                supcon_denom_pos_weight=args.denominator_pos_weight,
                 sinkhorn=args.sinkhorn,
                 sinkhorn_iters=args.sinkhorn_iters,
             )
@@ -567,6 +573,7 @@ def main() -> None:
             supcon_softpos_tag = (
                 f"_SupConSoftPos-{'LinearTau' + str(args.supcon_tau_start) + 'to' + str(args.supcon_tau_end) if args.tau_annealing else 'Tau' + str(args.supcon_soft_pos_tau)}"
                 f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
+                f"{'-DenomPosW' if args.denominator_pos_weight else ''}"
                 f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
                 f"-SIGReg{args.sigreg_weight}"
             ) if args.supcon_soft_pos_loss else ""

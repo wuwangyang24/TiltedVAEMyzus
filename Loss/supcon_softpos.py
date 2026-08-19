@@ -37,17 +37,20 @@ class SupConSoftPosLoss(nn.Module):
 
     def __init__(self, pos_weight_tau: float = 0.1,
                  sinkhorn: bool = False,
-                 sinkhorn_iters: int = 5) -> None:
+                 sinkhorn_iters: int = 5,
+                 denom_pos_weight: bool = False) -> None:
         super().__init__()
         self.pos_weight_tau = pos_weight_tau
         self.sinkhorn = sinkhorn
         self.sinkhorn_iters = sinkhorn_iters
+        self.denom_pos_weight = denom_pos_weight
 
     def forward(self, embeddings: Tensor, labels: Tensor,
                 sigreg_weight: float = 0.1,
                 temperature: float = 0.1,
                 pos_weight_tau: Optional[float] = None,
                 use_pos_weighting: bool = True,
+                denom_pos_weight: Optional[bool] = None,
                 sigreg_slices: int = 512,
                 sigreg_num_freqs: int = 33,
                 sigreg_t_max: float = 8.0,
@@ -55,6 +58,7 @@ class SupConSoftPosLoss(nn.Module):
                 **kwargs) -> Dict[str, Tensor]:
         temperature = kwargs.get("temperature", temperature)
         pos_weight_tau = self.pos_weight_tau if pos_weight_tau is None else pos_weight_tau
+        denom_pos_weight = self.denom_pos_weight if denom_pos_weight is None else denom_pos_weight
         device = embeddings.device
         n, d = embeddings.shape
         labels_flat = labels.view(-1).long()
@@ -73,10 +77,6 @@ class SupConSoftPosLoss(nn.Module):
         logits = normed @ normed.t() / temperature
         logits = logits - logits.max(dim=1, keepdim=True).values.detach()
 
-        # SupCon (coupled) denominator: all non-self samples.
-        exp_logits = torch.exp(logits) * (1.0 - self_mask)
-        log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-12)
-
         # --- Soft positive weights (same scheme as DCLSoftPos) ---
         raw_cos = normed @ normed.t()
         if not use_pos_weighting:
@@ -90,6 +90,17 @@ class SupConSoftPosLoss(nn.Module):
             else:
                 pos_weight_logits = pos_weight_logits + (1.0 - pos_mask) * _SMALL_NUM
                 pos_weights = F.softmax(pos_weight_logits, dim=1) * pos_mask
+
+        # SupCon (coupled) denominator over all non-self samples.  With
+        # ``denom_pos_weight`` the positive terms inside the denominator are
+        # re-weighted by the same soft positive weights (negatives stay at 1).
+        if denom_pos_weight:
+            neg_mask = (1.0 - self_mask - pos_mask).clamp(min=0.0)
+            denom_coeff = neg_mask + pos_weights
+        else:
+            denom_coeff = 1.0 - self_mask
+        exp_logits = torch.exp(logits) * denom_coeff
+        log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-12)
 
         # Weighted log-likelihood over each anchor's positives.
         weighted_log_prob_pos = (pos_weights * log_prob).sum(dim=1)
