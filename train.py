@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 
-from Models import VAE, TiltedVAE, DinoV2LoRA
+from Models import VAE, TiltedVAE, DinoV2LoRA, ResNet18
 from dataset import VAEDataModule, ContrastiveDataModule, InatDataModule
 from experiment import VAEExperiment
 from contrastive_experiment import ContrastiveExperiment, LeJEPAExperiment
@@ -60,11 +60,13 @@ def parse_args() -> argparse.Namespace:
 
     # Model
     parser.add_argument("--model", type=str, default="vae",
-                        choices=["vae", "tilted", "dino_lora"],
+                        choices=["vae", "tilted", "dino_lora", "resnet18"],
                         help="Which model to train: 'vae' (standard VAE), "
                              "'tilted' (TiltedVAE with an exponentially tilted prior), "
-                             "or 'dino_lora' (LoRA-adapted DINOv2 trained with a "
-                             "supervised InfoNCE/SupCon loss over synthesis programs)")
+                             "'dino_lora' (LoRA-adapted DINOv2 trained with a "
+                             "supervised InfoNCE/SupCon loss over synthesis programs), "
+                             "or 'resnet18' (fully fine-tuned ResNet-18 trained with the "
+                             "same supervised contrastive losses, no LoRA)")
     parser.add_argument("--in_channels", type=int, default=3)
     parser.add_argument("--latent_dim", type=int, default=128)
     parser.add_argument("--tau", type=float, default=None,
@@ -318,11 +320,14 @@ def main() -> None:
         torch.backends.cudnn.benchmark = True
 
     is_dino = args.model == "dino_lora"
+    is_resnet = args.model == "resnet18"
+    is_contrastive = is_dino or is_resnet
 
-    if is_dino:
+    if is_contrastive:
         # DINOv2 expects 3-channel, patch14-compatible inputs. Force a valid
         # image size (multiple of 14) and RGB regardless of the VAE defaults.
-        if args.img_size % 14 != 0:
+        # ResNet-18 accepts any size, so only the DINOv2 path is constrained.
+        if is_dino and args.img_size % 14 != 0:
             args.img_size = 224
             print(f"[dino_lora] img_size must be a multiple of 14; using {args.img_size}")
         args.in_channels = 3
@@ -383,31 +388,53 @@ def main() -> None:
                 seed=args.seed,
             )
 
-        model = DinoV2LoRA(
-            backbone=args.dino_backbone,
-            img_size=args.img_size,
-            embedding_dim=args.embedding_dim,
-            proj_hidden_dim=args.proj_hidden_dim,
-            lora_rank=args.lora_rank,
-            lora_alpha=args.lora_alpha,
-            lora_dropout=args.lora_dropout,
-            lora_targets=args.lora_targets,
-            temperature=args.temperature,
-            use_proj_head=args.use_proj_head,
-            dcl_ema_momentum=args.dcl_ema_momentum,
-            dcl_suspicion_tau=args.dcl_suspicion_tau,
-            dcl_suspicion_bias=args.dcl_suspicion_bias,
-            dcl_suspicion_standardize=args.dcl_suspicion_standardize,
-            dcl_normal=args.normal_dcl,
-            dcl_soft_pos=args.dcl_soft_pos_loss,
-            dcl_soft_pos_tau=args.dcl_soft_pos_tau,
-            supcon_soft_pos=args.supcon_soft_pos_loss,
-            supcon_soft_pos_tau=args.supcon_soft_pos_tau,
-            sinkhorn=args.sinkhorn,
-            sinkhorn_iters=args.sinkhorn_iters,
-        )
+        if is_resnet:
+            model = ResNet18(
+                img_size=args.img_size,
+                embedding_dim=args.embedding_dim,
+                proj_hidden_dim=args.proj_hidden_dim,
+                temperature=args.temperature,
+                use_proj_head=args.use_proj_head,
+                dcl_ema_momentum=args.dcl_ema_momentum,
+                dcl_suspicion_tau=args.dcl_suspicion_tau,
+                dcl_suspicion_bias=args.dcl_suspicion_bias,
+                dcl_suspicion_standardize=args.dcl_suspicion_standardize,
+                dcl_normal=args.normal_dcl,
+                dcl_soft_pos=args.dcl_soft_pos_loss,
+                dcl_soft_pos_tau=args.dcl_soft_pos_tau,
+                supcon_soft_pos=args.supcon_soft_pos_loss,
+                supcon_soft_pos_tau=args.supcon_soft_pos_tau,
+                sinkhorn=args.sinkhorn,
+                sinkhorn_iters=args.sinkhorn_iters,
+            )
+        else:
+            model = DinoV2LoRA(
+                backbone=args.dino_backbone,
+                img_size=args.img_size,
+                embedding_dim=args.embedding_dim,
+                proj_hidden_dim=args.proj_hidden_dim,
+                lora_rank=args.lora_rank,
+                lora_alpha=args.lora_alpha,
+                lora_dropout=args.lora_dropout,
+                lora_targets=args.lora_targets,
+                temperature=args.temperature,
+                use_proj_head=args.use_proj_head,
+                dcl_ema_momentum=args.dcl_ema_momentum,
+                dcl_suspicion_tau=args.dcl_suspicion_tau,
+                dcl_suspicion_bias=args.dcl_suspicion_bias,
+                dcl_suspicion_standardize=args.dcl_suspicion_standardize,
+                dcl_normal=args.normal_dcl,
+                dcl_soft_pos=args.dcl_soft_pos_loss,
+                dcl_soft_pos_tau=args.dcl_soft_pos_tau,
+                supcon_soft_pos=args.supcon_soft_pos_loss,
+                supcon_soft_pos_tau=args.supcon_soft_pos_tau,
+                sinkhorn=args.sinkhorn,
+                sinkhorn_iters=args.sinkhorn_iters,
+            )
 
         if args.ssl_lejepa:
+            if not is_dino:
+                raise ValueError("--ssl_lejepa is only supported with --model dino_lora.")
             experiment = LeJEPAExperiment(
                 model=model,
                 lr=args.lr,
@@ -492,8 +519,7 @@ def main() -> None:
         )
 
     # Build checkpoint suffix (also used as default W&B run name).
-    if is_dino:
-        targets_tag = "_".join(args.lora_targets)
+    if is_contrastive:
         proj_tag = "Proj" if args.use_proj_head else "NoProj"
         p_val = args.contrastive_classes_per_batch
         k_val = args.contrastive_samples_per_class
@@ -501,13 +527,20 @@ def main() -> None:
         dataset_tag = f"_inat_{args.train_cat}->{args.test_cat}" if args.dataset == "inat" else ""
         if args.dataset == "inat" and args.superclass:
             dataset_tag += f"_{args.superclass}"
+        if is_resnet:
+            model_prefix = "ResNet18"
+        else:
+            targets_tag = "_".join(args.lora_targets)
+            model_prefix = (
+                f"DINO_LoRA_{targets_tag}"
+                f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
+            )
         if args.ssl_lejepa:
             cv_tag = "_CompViews" if args.ssl_compound_views else ""
             aug_tag = (f"_Aug-R{args.ssl_rotation:.0f}T{args.ssl_translate}"
                        f"S{args.ssl_min_scale}B{args.ssl_gaussian_blur}")
             ckpt_suffix = (
-                f"DINO_LoRA_{targets_tag}"
-                f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
+                f"{model_prefix}"
                 f"_BS{args.batch_size}"
                 f"_{proj_tag}"
                 f"_LeJEPA_Views{args.ssl_views}_SW{args.sigreg_weight}"
@@ -538,8 +571,7 @@ def main() -> None:
                 f"-SIGReg{args.sigreg_weight}"
             ) if args.supcon_soft_pos_loss else ""
             ckpt_suffix = (
-                f"DINO_LoRA_{targets_tag}"
-                f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
+                f"{model_prefix}"
                 f"_P{p_val}_K{k_val}_BS{args.batch_size}"
                 f"_{proj_tag}"
                 f"_T{args.temperature}"
@@ -592,16 +624,16 @@ def main() -> None:
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
     callbacks = [lr_monitor]
 
-    if is_dino and not args.ssl_lejepa:
-        linprobe_checkpoint_callback = ModelCheckpoint(
+    if is_contrastive and not args.ssl_lejepa:
+        best_val_checkpoint_callback = ModelCheckpoint(
             dirpath=ckpt_dir,
-            filename=args.model + "-best-linprobe-traincat-{epoch:02d}-{val_linprobe_traincat_top1:.4f}",
-            monitor="val_linprobe_traincat_top1",
-            mode="max",
+            filename=args.model + "-best-val_loss-{epoch:02d}-{val_loss:.4f}",
+            monitor="val_loss",
+            mode="min",
             save_top_k=1,
             save_last=True,
         )
-        callbacks.append(linprobe_checkpoint_callback)
+        callbacks.append(best_val_checkpoint_callback)
     else:
         # No linear-probe metric available (VAE / LeJEPA): keep only the last epoch.
         callbacks.append(ModelCheckpoint(dirpath=ckpt_dir, save_last=True, save_top_k=0))
