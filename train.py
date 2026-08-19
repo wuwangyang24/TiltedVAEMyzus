@@ -471,6 +471,7 @@ def main() -> None:
                 infonce_softpos=args.infonce_softpos,
                 supcon_softpos=args.supcon_soft_pos_loss,
                 supcon_soft_pos_tau=args.supcon_soft_pos_tau,
+                denom_pos_weight=args.denominator_pos_weight,
                 tau_annealing=args.tau_annealing,
                 supcon_tau_start=args.supcon_tau_start,
                 supcon_tau_end=args.supcon_tau_end,
@@ -568,6 +569,7 @@ def main() -> None:
             infonce_softpos_tag = (
                 f"_InfoNCESoftPos-Tau{args.pos_weight_tau}"
                 f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
+                f"{'-DenomPosW' if args.denominator_pos_weight else ''}"
                 f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
             ) if args.infonce_softpos else ""
             supcon_softpos_tag = (

@@ -27,6 +27,7 @@ def infonce_softpos_loss(embeddings: Tensor, labels: Tensor,
                          temperature: float = 0.1,
                          pos_weight_tau: float = 0.1,
                          use_pos_weighting: bool = True,
+                         denom_pos_weight: bool = False,
                          sinkhorn: bool = False,
                          sinkhorn_iters: int = 5,
                          test_labels: Tensor = None,
@@ -41,6 +42,8 @@ def infonce_softpos_loss(embeddings: Tensor, labels: Tensor,
             cosine similarities into weights (lower = sharper, more weight on
             the closest positives).
         use_pos_weighting: if False, weight all positives uniformly.
+        denom_pos_weight: if True, also re-weight the positive terms inside the
+            denominator by the soft positive weights (negatives stay at 1).
         sinkhorn: if True, use Sinkhorn-Knopp iterations for a doubly-stochastic
             positive-weight matrix instead of per-row softmax.
         sinkhorn_iters: number of Sinkhorn-Knopp iterations.
@@ -64,10 +67,6 @@ def infonce_softpos_loss(embeddings: Tensor, labels: Tensor,
     logits = embeddings @ embeddings.t() / temperature
     logits = logits - logits.max(dim=1, keepdim=True).values.detach()
 
-    # SupCon denominator: all non-self samples (positives + negatives).
-    exp_logits = torch.exp(logits) * (1.0 - self_mask)
-    log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-12)
-
     # Soft positive weights from cosine similarity (same scheme as DCLSoftPos).
     raw_cos = embeddings @ embeddings.t()
     if not use_pos_weighting:
@@ -81,6 +80,17 @@ def infonce_softpos_loss(embeddings: Tensor, labels: Tensor,
         else:
             pos_weight_logits = pos_weight_logits + (1.0 - pos_mask) * _SMALL_NUM
             pos_weights = F.softmax(pos_weight_logits, dim=1) * pos_mask
+
+    # SupCon denominator over all non-self samples.  With ``denom_pos_weight``
+    # the positive terms inside the denominator are re-weighted by the same soft
+    # positive weights (negatives stay at weight 1).
+    if denom_pos_weight:
+        neg_mask = (1.0 - self_mask - pos_mask).clamp(min=0.0)
+        denom_coeff = neg_mask + pos_weights
+    else:
+        denom_coeff = 1.0 - self_mask
+    exp_logits = torch.exp(logits) * denom_coeff
+    log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-12)
 
     # Weighted log-likelihood over each anchor's positives.
     weighted_log_prob_pos = (pos_weights * log_prob).sum(dim=1)

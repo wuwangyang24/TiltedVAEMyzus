@@ -41,6 +41,7 @@ class ContrastiveExperiment(pl.LightningModule):
                  vanilla_supcon: bool = False,
                  pos_weight_tau: float = 0.1,
                  supcon_soft_pos_tau: float = 0.1,
+                 denom_pos_weight: bool = False,
                  tau_annealing: bool = False,
                  supcon_tau_start: float = 0.1,
                  supcon_tau_end: float = 0.1,
@@ -67,6 +68,7 @@ class ContrastiveExperiment(pl.LightningModule):
         self.vanilla_supcon = vanilla_supcon
         self.pos_weight_tau = pos_weight_tau
         self.supcon_soft_pos_tau = supcon_soft_pos_tau
+        self.denom_pos_weight = denom_pos_weight
         self.tau_annealing = tau_annealing
         self.supcon_tau_start = supcon_tau_start
         self.supcon_tau_end = supcon_tau_end
@@ -137,6 +139,7 @@ class ContrastiveExperiment(pl.LightningModule):
                 embeddings, labels, temperature=self.temperature,
                 pos_weight_tau=self.pos_weight_tau,
                 use_pos_weighting=self._use_pos_weighting(),
+                denom_pos_weight=self.denom_pos_weight,
                 sinkhorn=self.sinkhorn, sinkhorn_iters=self.sinkhorn_iters,
                 test_labels=test_labels)
         elif self.supcon_softpos:
