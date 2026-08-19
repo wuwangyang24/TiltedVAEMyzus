@@ -57,6 +57,7 @@ class ResNet18(nn.Module):
                  dcl_soft_pos_tau: float = 0.1,
                  supcon_soft_pos: bool = False,
                  supcon_soft_pos_tau: float = 0.1,
+                 supcon_denom_pos_weight: bool = False,
                  sinkhorn: bool = False,
                  sinkhorn_iters: int = 5,
                  pretrained: bool = True) -> None:
@@ -110,6 +111,7 @@ class ResNet18(nn.Module):
             pos_weight_tau=supcon_soft_pos_tau,
             sinkhorn=sinkhorn,
             sinkhorn_iters=sinkhorn_iters,
+            denom_pos_weight=supcon_denom_pos_weight,
         ) if supcon_soft_pos else None
 
     def trainable_parameters(self) -> List[nn.Parameter]:
