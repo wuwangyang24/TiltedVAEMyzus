@@ -49,7 +49,9 @@ class ContrastiveExperiment(pl.LightningModule):
                  sinkhorn: bool = False,
                  sinkhorn_iters: int = 5,
                  sigreg_weight: float = 0.1,
-                 sigreg_slices: int = 512) -> None:
+                 sigreg_slices: int = 512,
+                 train_cat: str = "train",
+                 test_cats: Optional[list] = None) -> None:
         super().__init__()
         self.model = model
         self.lr = lr
@@ -79,6 +81,8 @@ class ContrastiveExperiment(pl.LightningModule):
         self.sinkhorn_iters = sinkhorn_iters
         self.sigreg_weight = sigreg_weight
         self.sigreg_slices = sigreg_slices
+        self.train_cat = train_cat
+        self.test_cats = list(test_cats) if test_cats else ["test"]
         self.save_hyperparameters(ignore=["model"])
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -98,12 +102,19 @@ class ContrastiveExperiment(pl.LightningModule):
         return self.current_epoch >= self.no_pos_weight_epoch
 
     def _step(self, batch: Any) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
-        # Support both (images, labels) and (images, train_labels, test_labels)
+        # Support both (images, labels) and (images, train_labels, test_labels).
+        # ``test_labels`` may carry several evaluation taxonomy levels as a
+        # (B, num_test_cats) tensor; the loss only monitors the first level.
         if len(batch) == 3:
             images, labels, test_labels = batch
         else:
             images, labels = batch
             test_labels = None
+
+        if test_labels is not None and test_labels.ndim > 1:
+            loss_test_labels = test_labels[:, 0]
+        else:
+            loss_test_labels = test_labels
 
         if self.dcl_soft_pos_loss:
             embeddings = self.model(images, normalize=False)
@@ -111,14 +122,14 @@ class ContrastiveExperiment(pl.LightningModule):
                 embeddings, labels, temperature=self.temperature,
                 sigreg_weight=self.sigreg_weight,
                 sigreg_slices=self.sigreg_slices,
-                test_labels=test_labels)
+                test_labels=loss_test_labels)
         elif self.dcl_sigreg_loss:
             embeddings = self.model(images, normalize=False)
             loss_dict = self.model.dcl_sigreg_loss_function(
                 embeddings, labels, temperature=self.temperature,
                 sigreg_weight=self.sigreg_weight,
                 sigreg_slices=self.sigreg_slices,
-                test_labels=test_labels)
+                test_labels=loss_test_labels)
         elif self.contrastive_sigreg_loss:
             embeddings = self.model(images, normalize=False)
             loss_dict = self.model.contrastive_sigreg_loss_function(
@@ -141,7 +152,7 @@ class ContrastiveExperiment(pl.LightningModule):
                 use_pos_weighting=self._use_pos_weighting(),
                 denom_pos_weight=self.denom_pos_weight,
                 sinkhorn=self.sinkhorn, sinkhorn_iters=self.sinkhorn_iters,
-                test_labels=test_labels)
+                test_labels=loss_test_labels)
         elif self.supcon_softpos:
             embeddings = self.model(images, normalize=False)
             supcon_tau = self._current_supcon_tau()
@@ -151,7 +162,7 @@ class ContrastiveExperiment(pl.LightningModule):
                 use_pos_weighting=self._use_pos_weighting(),
                 sigreg_weight=self.sigreg_weight,
                 sigreg_slices=self.sigreg_slices,
-                test_labels=test_labels)
+                test_labels=loss_test_labels)
         else:
             embeddings = self.model(images)
             loss_dict = self.model.loss_function(
@@ -197,7 +208,10 @@ class ContrastiveExperiment(pl.LightningModule):
         if test_labels is not None:
             self._val_embeddings.append(embeddings.detach().cpu())
             self._val_train_labels.append(train_labels.detach().view(-1).cpu())
-            self._val_test_labels.append(test_labels.detach().view(-1).cpu())
+            # Keep the (B, num_test_cats) layout so each taxonomy level stays
+            # in its own column for per-level evaluation.
+            tl = test_labels.detach().cpu()
+            self._val_test_labels.append(tl if tl.ndim == 2 else tl.view(-1, 1))
         return loss_dict["loss"]
 
     def on_validation_epoch_end(self) -> None:
@@ -219,35 +233,33 @@ class ContrastiveExperiment(pl.LightningModule):
         val_embeddings = val_embeddings.to(device)
         val_train_labels = val_train_labels.to(device)
         val_test_labels = val_test_labels.to(device)
+        if val_test_labels.ndim == 1:
+            val_test_labels = val_test_labels.unsqueeze(1)
 
-        # KNN and linear probe on test_cat labels.
-        knn = self._full_set_knn_accuracy(val_embeddings, val_test_labels)
+        # kNN + linear probe on the train_cat labels.
+        self._eval_and_log(val_embeddings, val_train_labels,
+                           f"val_train_{self.train_cat}", prog_bar=False)
+
+        # kNN + linear probe on each test_cat taxonomy level.
+        for i, name in enumerate(self.test_cats):
+            self._eval_and_log(
+                val_embeddings, val_test_labels[:, i],
+                f"val_test_{name}", prog_bar=(i == 0),
+            )
+
+    def _eval_and_log(self, embeddings: torch.Tensor, labels: torch.Tensor,
+                      prefix: str, prog_bar: bool = False) -> None:
+        """Compute top-1/5 kNN and linear-probe accuracy for one label set."""
+        knn = self._full_set_knn_accuracy(embeddings, labels)
+        probe = self._linear_probe(embeddings, labels)
         self.log_dict(
             {
-                "val_knn_acc": knn[1],
-                "val_knn_top3_acc": knn[3],
-                "val_knn_top5_acc": knn[5],
+                f"{prefix}_knn_top1": knn[1],
+                f"{prefix}_knn_top5": knn[5],
+                f"{prefix}_linprobe_top1": probe["top1_acc"],
+                f"{prefix}_linprobe_top5": probe["top5_acc"],
             },
-            prog_bar=True, sync_dist=False,
-        )
-
-        probe_test = self._linear_probe(val_embeddings, val_test_labels)
-        self.log_dict(
-            {
-                "val_linprobe_top1": probe_test["top1_acc"],
-                "val_linprobe_top5": probe_test["top5_acc"],
-            },
-            prog_bar=False, sync_dist=False,
-        )
-
-        # Linear probe on train_cat labels.
-        probe_train = self._linear_probe(val_embeddings, val_train_labels)
-        self.log_dict(
-            {
-                "val_linprobe_traincat_top1": probe_train["top1_acc"],
-                "val_linprobe_traincat_top5": probe_train["top5_acc"],
-            },
-            prog_bar=False, sync_dist=False,
+            prog_bar=prog_bar, sync_dist=False,
         )
 
     @staticmethod

@@ -29,9 +29,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train_cat", type=str, default="class",
                         help="Taxonomy level for contrastive training labels (inat only). "
                              "Options: kingdom, phylum, class, order, family, genus")
-    parser.add_argument("--test_cat", type=str, default="phylum",
-                        help="Taxonomy level for kNN evaluation labels (inat only). "
-                             "Options: kingdom, phylum, class, order, family, genus")
+    parser.add_argument("--test_cat", type=str, nargs="+", default=["phylum"],
+                        help="Taxonomy level(s) for kNN / linear-probe evaluation "
+                             "labels (inat only). One or more of: kingdom, phylum, "
+                             "class, order, family, genus. When several are given, "
+                             "kNN and linear-probe metrics are logged for each.")
     parser.add_argument("--superclass", type=str, default=None,
                         help="Keep only iNat categories whose 'supercategory' matches "
                              "this value (e.g. Plants, Insects). inat only.")
@@ -481,6 +483,8 @@ def main() -> None:
                 sinkhorn_iters=args.sinkhorn_iters,
                 sigreg_weight=args.sigreg_weight,
                 sigreg_slices=args.sigreg_slices,
+                train_cat=args.train_cat,
+                test_cats=args.test_cat,
             )
     else:
         if not args.data_dir:
@@ -531,7 +535,8 @@ def main() -> None:
         p_val = args.contrastive_classes_per_batch
         k_val = args.contrastive_samples_per_class
         level_tag = "_Comp" if args.compound_level else ""
-        dataset_tag = f"_inat_{args.train_cat}->{args.test_cat}" if args.dataset == "inat" else ""
+        test_cat_tag = "-".join(args.test_cat)
+        dataset_tag = f"_inat_{args.train_cat}->{test_cat_tag}" if args.dataset == "inat" else ""
         if args.dataset == "inat" and args.superclass:
             dataset_tag += f"_{args.superclass}"
         if is_resnet:
