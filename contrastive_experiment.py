@@ -154,14 +154,12 @@ class ContrastiveExperiment(pl.LightningModule):
                 sinkhorn=self.sinkhorn, sinkhorn_iters=self.sinkhorn_iters,
                 test_labels=loss_test_labels)
         elif self.supcon_softpos:
-            embeddings = self.model(images, normalize=False)
+            embeddings = self.model(images)
             supcon_tau = self._current_supcon_tau()
             loss_dict = self.model.supcon_soft_pos_loss_function(
                 embeddings, labels, temperature=self.temperature,
                 pos_weight_tau=supcon_tau,
                 use_pos_weighting=self._use_pos_weighting(),
-                sigreg_weight=self.sigreg_weight,
-                sigreg_slices=self.sigreg_slices,
                 test_labels=loss_test_labels)
         else:
             embeddings = self.model(images)

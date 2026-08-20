@@ -582,7 +582,6 @@ def main() -> None:
                 f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
                 f"{'-DenomPosW' if args.denominator_pos_weight else ''}"
                 f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
-                f"-SIGReg{args.sigreg_weight}"
             ) if args.supcon_soft_pos_loss else ""
             ckpt_suffix = (
                 f"{model_prefix}"

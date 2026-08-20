@@ -6,7 +6,7 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn import functional as F
 
-from .utils import sigreg_loss, batch_knn_accuracy, gaussianity_metrics
+from .utils import batch_knn_accuracy, gaussianity_metrics
 from .dcl_soft_pos import sinkhorn_normalize
 
 _SMALL_NUM = np.log(1e-45)
@@ -22,9 +22,7 @@ class SupConSoftPosLoss(nn.Module):
     positives are down-weighted, encouraging tighter within-class sub-clusters.
 
     Unlike DCL, the SupCon denominator stays *coupled* — it includes both
-    positives and negatives (all non-self samples).  As in
-    :class:`DCLSoftPosLoss`, a SIGReg regularizer on the batch embeddings is
-    added to prevent collapse.
+    positives and negatives (all non-self samples).
 
     Args:
         pos_weight_tau: temperature for the softmax that turns positive-pair
@@ -109,11 +107,7 @@ class SupConSoftPosLoss(nn.Module):
         else:
             supcon_loss = torch.zeros((), device=device, requires_grad=True)
 
-        # SIGReg on batch embeddings.
-        sr_loss = sigreg_loss(
-            embeddings, sigreg_slices, sigreg_num_freqs, sigreg_t_max)
-
-        loss = supcon_loss + sigreg_weight * sr_loss
+        loss = supcon_loss
 
         with torch.no_grad():
             knn_accs = batch_knn_accuracy(logits, labels_col, self_mask)
@@ -121,7 +115,6 @@ class SupConSoftPosLoss(nn.Module):
             pw_ent = pw_ent[valid].mean() if valid.any() else torch.zeros((), device=device)
             metrics = {
                 "supcon_loss": supcon_loss.detach(),
-                "sigreg_loss": sr_loss.detach(),
                 "pos_weight_entropy": pw_ent,
                 "pos_fraction": valid.float().mean(),
                 "emb_std": embeddings.std(dim=0).mean(),
