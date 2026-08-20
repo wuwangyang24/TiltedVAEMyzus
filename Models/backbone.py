@@ -20,7 +20,9 @@ except ImportError:  # pragma: no cover - timm is a declared dependency
 
 
 # Supported fully fine-tuned backbones (timm model ids).
-_SUPPORTED_BACKBONES = ("resnet18", "resnet50", "vit_small_patch16_224")
+_SUPPORTED_BACKBONES = (
+    "resnet18", "resnet50", "vit_small_patch16_224", "swin_tiny_patch4_window7_224",
+)
 
 
 class Backbone(nn.Module):
@@ -33,7 +35,8 @@ class Backbone(nn.Module):
     replacement inside :class:`ContrastiveExperiment`.
 
     Despite the class name, the ``backbone`` argument selects which timm model to
-    fine-tune (``resnet18``, ``resnet50`` or ``vit_small_patch16_224``).
+    fine-tune (``resnet18``, ``resnet50``, ``vit_small_patch16_224`` or
+    ``swin_tiny_patch4_window7_224``).
 
     Args:
         backbone: timm model id to fully fine-tune (see ``_SUPPORTED_BACKBONES``).
@@ -89,10 +92,11 @@ class Backbone(nn.Module):
         self.use_proj_head = use_proj_head
 
         # Feature-extractor backbone (num_classes=0 -> pooled features, no head).
-        # The whole backbone is trainable (full fine-tuning). ViT backbones need
-        # img_size to build position embeddings for non-default input sizes.
+        # The whole backbone is trainable (full fine-tuning). Transformer
+        # backbones need img_size to build position embeddings for non-default
+        # input sizes.
         create_kwargs = dict(pretrained=pretrained, num_classes=0)
-        if backbone.startswith("vit"):
+        if backbone.startswith(("vit", "swin")):
             create_kwargs["img_size"] = img_size
         self.backbone = timm.create_model(backbone, **create_kwargs)
         feat_dim = self.backbone.num_features

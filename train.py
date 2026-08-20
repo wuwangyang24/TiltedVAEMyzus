@@ -182,9 +182,11 @@ def parse_args() -> argparse.Namespace:
                                  "vit_large_patch14_dinov2"],
                         help="DINOv2 backbone variant to adapt with LoRA")
     parser.add_argument("--backbone", type=str, default="resnet18",
-                        choices=["resnet18", "resnet50", "vit_small_patch16_224"],
+                        choices=["resnet18", "resnet50", "vit_small_patch16_224",
+                                 "swin_tiny_patch4_window7_224"],
                         help="Backbone to fully fine-tune when --model backbone: "
-                             "'resnet18', 'resnet50' or 'vit_small_patch16_224'")
+                             "'resnet18', 'resnet50', 'vit_small_patch16_224' or "
+                             "'swin_tiny_patch4_window7_224'")
     parser.add_argument("--embedding_dim", type=int, default=256,
                         help="Projected embedding dimension for the contrastive head")
     parser.add_argument("--proj_hidden_dim", type=int, default=2048,
