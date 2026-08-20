@@ -2,6 +2,6 @@
 from .VAE import VAE
 from .TiltedVAE import TiltedVAE
 from .DinoV2LoRA import DinoV2LoRA
-from .ResNet18 import ResNet18
+from .backbone import Backbone
 
-__all__ = ["VAE", "TiltedVAE", "DinoV2LoRA", "ResNet18"]
+__all__ = ["VAE", "TiltedVAE", "DinoV2LoRA", "Backbone"]

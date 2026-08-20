@@ -106,7 +106,7 @@ class BestValLossReporter(Callback):
                   "w", encoding="utf-8") as f:
             f.write(report)
 
-from Models import VAE, TiltedVAE, DinoV2LoRA, ResNet18
+from Models import VAE, TiltedVAE, DinoV2LoRA, Backbone
 from dataset import VAEDataModule, ContrastiveDataModule, InatDataModule
 from experiment import VAEExperiment
 from contrastive_experiment import ContrastiveExperiment, LeJEPAExperiment
@@ -161,13 +161,14 @@ def parse_args() -> argparse.Namespace:
 
     # Model
     parser.add_argument("--model", type=str, default="vae",
-                        choices=["vae", "tilted", "dino_lora", "resnet18"],
+                        choices=["vae", "tilted", "dino_lora", "backbone"],
                         help="Which model to train: 'vae' (standard VAE), "
                              "'tilted' (TiltedVAE with an exponentially tilted prior), "
                              "'dino_lora' (LoRA-adapted DINOv2 trained with a "
                              "supervised InfoNCE/SupCon loss over synthesis programs), "
-                             "or 'resnet18' (fully fine-tuned ResNet-18 trained with the "
-                             "same supervised contrastive losses, no LoRA)")
+                             "or 'backbone' (a fully fine-tuned backbone trained with the "
+                             "same supervised contrastive losses, no LoRA; pick the "
+                             "architecture with --backbone)")
     parser.add_argument("--in_channels", type=int, default=3)
     parser.add_argument("--latent_dim", type=int, default=128)
     parser.add_argument("--tau", type=float, default=None,
@@ -180,6 +181,10 @@ def parse_args() -> argparse.Namespace:
                                  "vit_base_patch14_dinov2",
                                  "vit_large_patch14_dinov2"],
                         help="DINOv2 backbone variant to adapt with LoRA")
+    parser.add_argument("--backbone", type=str, default="resnet18",
+                        choices=["resnet18", "resnet50", "vit_small_patch16_224"],
+                        help="Backbone to fully fine-tune when --model backbone: "
+                             "'resnet18', 'resnet50' or 'vit_small_patch16_224'")
     parser.add_argument("--embedding_dim", type=int, default=256,
                         help="Projected embedding dimension for the contrastive head")
     parser.add_argument("--proj_hidden_dim", type=int, default=2048,
@@ -421,13 +426,14 @@ def main() -> None:
         torch.backends.cudnn.benchmark = True
 
     is_dino = args.model == "dino_lora"
-    is_resnet = args.model == "resnet18"
-    is_contrastive = is_dino or is_resnet
+    is_backbone = args.model == "backbone"
+    is_contrastive = is_dino or is_backbone
 
     if is_contrastive:
         # DINOv2 expects 3-channel, patch14-compatible inputs. Force a valid
         # image size (multiple of 14) and RGB regardless of the VAE defaults.
-        # ResNet-18 accepts any size, so only the DINOv2 path is constrained.
+        # The fully fine-tuned backbones handle their own sizing, so only the
+        # DINOv2 path is constrained here.
         if is_dino and args.img_size % 14 != 0:
             args.img_size = 224
             print(f"[dino_lora] img_size must be a multiple of 14; using {args.img_size}")
@@ -489,8 +495,9 @@ def main() -> None:
                 seed=args.seed,
             )
 
-        if is_resnet:
-            model = ResNet18(
+        if is_backbone:
+            model = Backbone(
+                backbone=args.backbone,
                 img_size=args.img_size,
                 embedding_dim=args.embedding_dim,
                 proj_hidden_dim=args.proj_hidden_dim,
@@ -632,8 +639,8 @@ def main() -> None:
         dataset_tag = f"_inat_{args.train_cat}->{test_cat_tag}" if args.dataset == "inat" else ""
         if args.dataset == "inat" and args.superclass:
             dataset_tag += f"_{args.superclass}"
-        if is_resnet:
-            model_prefix = "ResNet18"
+        if is_backbone:
+            model_prefix = "Backbone"
         else:
             targets_tag = "_".join(args.lora_targets)
             model_prefix = (

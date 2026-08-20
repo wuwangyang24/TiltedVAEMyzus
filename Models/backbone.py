@@ -19,16 +19,24 @@ except ImportError:  # pragma: no cover - timm is a declared dependency
     _HAS_TIMM = False
 
 
-class ResNet18(nn.Module):
-    """Fully fine-tuned ResNet-18 backbone with an optional projection head for
-    supervised contrastive (InfoNCE / SupCon) representation learning.
+# Supported fully fine-tuned backbones (timm model ids).
+_SUPPORTED_BACKBONES = ("resnet18", "resnet50", "vit_small_patch16_224")
+
+
+class Backbone(nn.Module):
+    """Fully fine-tuned convolutional / ViT backbone with an optional projection
+    head for supervised contrastive (InfoNCE / SupCon) representation learning.
 
     Unlike :class:`DinoV2LoRA`, the entire backbone is trainable (full
     fine-tuning, no LoRA). ``forward`` returns L2-normalized embeddings suitable
     for a cosine-similarity contrastive objective, so this model is a drop-in
     replacement inside :class:`ContrastiveExperiment`.
 
+    Despite the class name, the ``backbone`` argument selects which timm model to
+    fine-tune (``resnet18``, ``resnet50`` or ``vit_small_patch16_224``).
+
     Args:
+        backbone: timm model id to fully fine-tune (see ``_SUPPORTED_BACKBONES``).
         img_size: square input size fed to the backbone (any size >= 32).
         embedding_dim: dimension of the output (projected) embedding.
         proj_hidden_dim: hidden width of the 2-layer projection MLP.
@@ -36,13 +44,14 @@ class ResNet18(nn.Module):
         use_proj_head: if True, add a 2-layer MLP projection head on top of the
             backbone features; otherwise output the L2-normalized backbone
             features directly.
-        pretrained: load ImageNet-pretrained ResNet-18 weights.
+        pretrained: load ImageNet-pretrained backbone weights.
     """
 
     # The pipeline uses this flag to skip image reconstruction/sampling logging.
     supports_image_generation = False
 
     def __init__(self,
+                 backbone: str = "resnet18",
                  img_size: int = 224,
                  embedding_dim: int = 256,
                  proj_hidden_dim: int = 2048,
@@ -65,21 +74,27 @@ class ResNet18(nn.Module):
 
         if not _HAS_TIMM:
             raise ImportError(
-                "timm is required for ResNet18. Install it with `pip install timm`."
+                "timm is required for Backbone. Install it with `pip install timm`."
             )
 
+        if backbone not in _SUPPORTED_BACKBONES:
+            raise ValueError(
+                f"Unknown backbone '{backbone}'. Choose from {list(_SUPPORTED_BACKBONES)}."
+            )
+
+        self.backbone_name = backbone
         self.img_size = img_size
         self.embedding_dim = embedding_dim
         self.temperature = temperature
         self.use_proj_head = use_proj_head
 
         # Feature-extractor backbone (num_classes=0 -> pooled features, no head).
-        # The whole backbone is trainable (full fine-tuning).
-        self.backbone = timm.create_model(
-            "resnet18",
-            pretrained=pretrained,
-            num_classes=0,
-        )
+        # The whole backbone is trainable (full fine-tuning). ViT backbones need
+        # img_size to build position embeddings for non-default input sizes.
+        create_kwargs = dict(pretrained=pretrained, num_classes=0)
+        if backbone.startswith("vit"):
+            create_kwargs["img_size"] = img_size
+        self.backbone = timm.create_model(backbone, **create_kwargs)
         feat_dim = self.backbone.num_features
 
         # Trainable projection head mapping backbone features -> embedding space.
