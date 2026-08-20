@@ -4,8 +4,97 @@ import os
 
 import torch
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning.callbacks import Callback, LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
+
+
+class BestValLossReporter(Callback):
+    """Track the epoch with the lowest ``val_loss`` and, at the end of
+    training, print a table of the kNN / linear-probe metrics recorded at that
+    epoch together with the positive-weight temperature and Sinkhorn settings."""
+
+    def __init__(self, pos_weight_tau, sinkhorn: bool, sinkhorn_iters: int) -> None:
+        super().__init__()
+        self.pos_weight_tau = pos_weight_tau
+        self.sinkhorn = sinkhorn
+        self.sinkhorn_iters = sinkhorn_iters
+        self.best_val_loss = float("inf")
+        self.best_epoch = None
+        self.best_metrics: dict = {}
+
+    def on_validation_epoch_end(self, trainer, pl_module) -> None:
+        if trainer.sanity_checking:
+            return
+        metrics = trainer.callback_metrics
+        val_loss = metrics.get("val_loss")
+        if val_loss is None:
+            return
+        val_loss = float(val_loss)
+        if val_loss < self.best_val_loss:
+            self.best_val_loss = val_loss
+            self.best_epoch = int(trainer.current_epoch)
+            self.best_metrics = {
+                k: float(v)
+                for k, v in metrics.items()
+                if ("knn_top" in k or "linprobe_top" in k)
+            }
+
+    def on_fit_end(self, trainer, pl_module) -> None:
+        if self.best_epoch is None:
+            return
+
+        # Group the recorded metrics by their label-set prefix so each row of
+        # the table corresponds to one evaluation (e.g. val_test_phylum).
+        prefixes = sorted({
+            k.rsplit("_", 2)[0] for k in self.best_metrics
+        })
+
+        def fmt(value):
+            return f"{value:.4f}" if value is not None else "-"
+
+        header = ["Eval", "kNN@1", "kNN@5", "LinProbe@1", "LinProbe@5"]
+        rows = []
+        for prefix in prefixes:
+            rows.append([
+                prefix,
+                fmt(self.best_metrics.get(f"{prefix}_knn_top1")),
+                fmt(self.best_metrics.get(f"{prefix}_knn_top5")),
+                fmt(self.best_metrics.get(f"{prefix}_linprobe_top1")),
+                fmt(self.best_metrics.get(f"{prefix}_linprobe_top5")),
+            ])
+
+        widths = [
+            max(len(header[i]), *(len(r[i]) for r in rows)) if rows else len(header[i])
+            for i in range(len(header))
+        ]
+
+        def render(cells):
+            return " | ".join(c.ljust(widths[i]) for i, c in enumerate(cells))
+
+        tau_str = (
+            f"{self.pos_weight_tau:.4g}"
+            if isinstance(self.pos_weight_tau, (int, float))
+            else str(self.pos_weight_tau)
+        )
+        sinkhorn_str = f"yes ({self.sinkhorn_iters} iters)" if self.sinkhorn else "no"
+
+        lines = [
+            "",
+            "=" * max(60, sum(widths) + 3 * (len(widths) - 1)),
+            f"Best val_loss: {self.best_val_loss:.6f} @ epoch {self.best_epoch}",
+            f"Positive-weight Tau: {tau_str}",
+            f"Sinkhorn: {sinkhorn_str}",
+            "-" * max(60, sum(widths) + 3 * (len(widths) - 1)),
+        ]
+        if rows:
+            lines.append(render(header))
+            lines.append("-+-".join("-" * w for w in widths))
+            lines.extend(render(r) for r in rows)
+        else:
+            lines.append("(no kNN / linear-probe metrics were recorded)")
+        lines.append("=" * max(60, sum(widths) + 3 * (len(widths) - 1)))
+        lines.append("")
+        print("\n".join(lines))
 
 from Models import VAE, TiltedVAE, DinoV2LoRA, ResNet18
 from dataset import VAEDataModule, ContrastiveDataModule, InatDataModule
@@ -629,8 +718,40 @@ def main() -> None:
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
     callbacks = [lr_monitor]
 
-    # Keep only the last epoch's checkpoint (last.ckpt) for all models.
+    # Keep the last epoch's checkpoint (last.ckpt) for all models.
     callbacks.append(ModelCheckpoint(dirpath=ckpt_dir, save_last=True, save_top_k=0))
+
+    # Also keep the checkpoint with the lowest validation loss.
+    callbacks.append(ModelCheckpoint(
+        dirpath=ckpt_dir,
+        filename="best-val-loss",
+        monitor="val_loss",
+        mode="min",
+        save_top_k=1,
+    ))
+
+    # Report the best-val-loss epoch's metrics as a table at the end of
+    # training (kNN / linear-probe accuracies are only produced by the
+    # contrastive models).
+    if is_contrastive:
+        # The active soft-positive loss determines which temperature governs the
+        # positive-pair weighting.
+        if args.supcon_soft_pos_loss:
+            pos_weight_tau = (
+                f"{args.supcon_tau_start}->{args.supcon_tau_end}"
+                if args.tau_annealing else args.supcon_soft_pos_tau
+            )
+        elif args.infonce_softpos:
+            pos_weight_tau = args.pos_weight_tau
+        elif args.dcl_soft_pos_loss:
+            pos_weight_tau = args.dcl_soft_pos_tau
+        else:
+            pos_weight_tau = "n/a"
+        callbacks.append(BestValLossReporter(
+            pos_weight_tau=pos_weight_tau,
+            sinkhorn=args.sinkhorn,
+            sinkhorn_iters=args.sinkhorn_iters,
+        ))
 
     # Trainer
     # Parse --devices: "auto" stays as-is; comma-separated digits become a
