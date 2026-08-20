@@ -638,19 +638,8 @@ def main() -> None:
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
     callbacks = [lr_monitor]
 
-    if is_contrastive and not args.ssl_lejepa:
-        best_val_checkpoint_callback = ModelCheckpoint(
-            dirpath=ckpt_dir,
-            filename=args.model + "-best-val_loss-{epoch:02d}-{val_loss:.4f}",
-            monitor="val_loss",
-            mode="min",
-            save_top_k=1,
-            save_last=True,
-        )
-        callbacks.append(best_val_checkpoint_callback)
-    else:
-        # No linear-probe metric available (VAE / LeJEPA): keep only the last epoch.
-        callbacks.append(ModelCheckpoint(dirpath=ckpt_dir, save_last=True, save_top_k=0))
+    # Keep only the last epoch's checkpoint (last.ckpt) for all models.
+    callbacks.append(ModelCheckpoint(dirpath=ckpt_dir, save_last=True, save_top_k=0))
 
     # Trainer
     # Parse --devices: "auto" stays as-is; comma-separated digits become a
