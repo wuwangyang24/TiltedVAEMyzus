@@ -267,10 +267,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup_epochs", type=int, default=0,
                         help="Linear warmup epochs before the main schedule. Default: 0")
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--weak_sigreg_weight", type=float, default=0.0,
-                        help="Weight for Weak-SIGReg covariance regularization (0 disables it)")
-    parser.add_argument("--weak_sigreg_sketch_dim", type=int, default=64,
-                        help="Sketch dimension used by Weak-SIGReg covariance regularization")
 
     # Trainer / hardware
     parser.add_argument("--accelerator", type=str, default="auto")
@@ -525,8 +521,6 @@ def main() -> None:
             anneal_k=args.anneal_k,
             anneal_x0=args.anneal_x0,
             au_threshold=args.au_threshold,
-            weak_sigreg_weight=args.weak_sigreg_weight,
-            weak_sigreg_sketch_dim=args.weak_sigreg_sketch_dim,
         )
 
     # Build checkpoint suffix (also used as default W&B run name).
@@ -568,7 +562,7 @@ def main() -> None:
             else:
                 susp_tag = ""
             dcl_tag = f"_DCL{dcl_variant}-SIGReg{args.sigreg_weight}{susp_tag}" if args.dcl_sigreg_loss else ""
-            softpos_tag = f"_DCLSoftPos-Tau{args.dcl_soft_pos_tau}{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}-SIGReg{args.sigreg_weight}" if args.dcl_soft_pos_loss else ""
+            softpos_tag = f"_DCLSoftPos-Tau{args.dcl_soft_pos_tau}{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}" if args.dcl_soft_pos_loss else ""
             vanilla_dcl_tag = "_VanillaDCL" if args.vanilla_dcl else ""
             vanilla_supcon_tag = "_VanillaSupCon" if args.vanilla_supcon else ""
             infonce_softpos_tag = (
@@ -600,8 +594,6 @@ def main() -> None:
             )
     else:
         ckpt_suffix = f"{args.model}-latent{args.latent_dim}-kld{args.kld_weight}-BS{args.batch_size}"
-        if args.weak_sigreg_weight > 0:
-            ckpt_suffix += f"-weaksigreg{args.weak_sigreg_weight}"
 
     # Resume from a previous run if a `last.ckpt` already exists for this config.
     ckpt_dir = os.path.join(args.output_dir, "checkpoints", ckpt_suffix)

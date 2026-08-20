@@ -44,14 +44,10 @@ class SupConSoftPosLoss(nn.Module):
         self.denom_pos_weight = denom_pos_weight
 
     def forward(self, embeddings: Tensor, labels: Tensor,
-                sigreg_weight: float = 0.1,
                 temperature: float = 0.1,
                 pos_weight_tau: Optional[float] = None,
                 use_pos_weighting: bool = True,
                 denom_pos_weight: Optional[bool] = None,
-                sigreg_slices: int = 512,
-                sigreg_num_freqs: int = 33,
-                sigreg_t_max: float = 8.0,
                 test_labels: Optional[Tensor] = None,
                 **kwargs) -> Dict[str, Tensor]:
         temperature = kwargs.get("temperature", temperature)

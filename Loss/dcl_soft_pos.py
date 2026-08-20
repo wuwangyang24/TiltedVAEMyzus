@@ -6,7 +6,7 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn import functional as F
 
-from .utils import sigreg_loss, batch_knn_accuracy, gaussianity_metrics
+from .utils import batch_knn_accuracy, gaussianity_metrics
 
 _SMALL_NUM = np.log(1e-45)
 
@@ -21,7 +21,7 @@ def sinkhorn_normalize(M: Tensor, n_iters: int = 5) -> Tensor:
 
 
 class DCLSoftPosLoss(nn.Module):
-    """DCL + SIGReg with similarity-weighted positives.
+    """DCL with similarity-weighted positives.
 
     Standard DCL averages the positive-pair similarities uniformly.  This
     variant re-weights positive pairs via a softmax over their cosine
@@ -49,11 +49,7 @@ class DCLSoftPosLoss(nn.Module):
         self.sinkhorn_iters = sinkhorn_iters
 
     def forward(self, embeddings: Tensor, labels: Tensor,
-                sigreg_weight: float = 0.1,
                 temperature: float = 0.1,
-                sigreg_slices: int = 512,
-                sigreg_num_freqs: int = 33,
-                sigreg_t_max: float = 8.0,
                 test_labels: Optional[Tensor] = None,
                 **kwargs) -> Dict[str, Tensor]:
         temperature = kwargs.get("temperature", temperature)
@@ -96,11 +92,7 @@ class DCLSoftPosLoss(nn.Module):
         neg_logits = sim + non_neg_mask * _SMALL_NUM
         neg_loss = torch.logsumexp(neg_logits, dim=1).mean()
 
-        # SIGReg on batch embeddings.
-        sr_loss = sigreg_loss(
-            embeddings, sigreg_slices, sigreg_num_freqs, sigreg_t_max)
-
-        loss = pos_loss + neg_loss + sigreg_weight * sr_loss
+        loss = pos_loss + neg_loss
 
         with torch.no_grad():
             knn_accs = batch_knn_accuracy(sim, labels_col, self_mask)
@@ -109,7 +101,6 @@ class DCLSoftPosLoss(nn.Module):
             metrics = {
                 "pos_loss": pos_loss.detach(),
                 "neg_loss": neg_loss.detach(),
-                "sigreg_loss": sr_loss.detach(),
                 "pos_weight_entropy": pw_ent,
                 "pos_fraction": valid.float().mean(),
                 "emb_std": embeddings.std(dim=0).mean(),

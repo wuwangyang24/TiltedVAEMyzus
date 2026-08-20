@@ -42,9 +42,7 @@ class VAEExperiment(pl.LightningModule):
                  anneal_kld: bool = False,
                  anneal_k: float = 0.0025,
                  anneal_x0: int = 2500,
-                 au_threshold: float = 0.01,
-                 weak_sigreg_weight: float = 0.0,
-                 weak_sigreg_sketch_dim: int = 64) -> None:
+                 au_threshold: float = 0.01) -> None:
         super().__init__()
         self.model = model
         self.lr = lr
@@ -56,8 +54,6 @@ class VAEExperiment(pl.LightningModule):
         self.anneal_k = anneal_k
         self.anneal_x0 = anneal_x0
         self.au_threshold = au_threshold
-        self.weak_sigreg_weight = weak_sigreg_weight
-        self.weak_sigreg_sketch_dim = weak_sigreg_sketch_dim
         # Running sufficient statistics for epoch-level latent metrics
         # (KL per dim, AU), aggregated across DDP ranks at epoch end.
         self._val_mu_sum: torch.Tensor = None
@@ -93,34 +89,7 @@ class VAEExperiment(pl.LightningModule):
         loss_dict = self.model.loss_function(*results, M_N=kld_weight)
         mu = results[2]
 
-        # Weak-SIGReg (Akbar, 2026): covariance regularization towards identity.
-        if self.weak_sigreg_weight > 0.0:
-            weak_sigreg_loss = self._weak_sigreg_loss(mu)
-            sigreg_weight = kld_weight if self.anneal_kld else self.weak_sigreg_weight
-            loss_dict["SIGReg_Weak"] = weak_sigreg_loss.detach()
-            loss_dict["SIGReg_Weak_weight"] = torch.tensor(
-                float(sigreg_weight), device=mu.device)
-            loss_dict["loss"] = loss_dict["loss"] + sigreg_weight * weak_sigreg_loss
-
         return loss_dict, mu
-
-    def _weak_sigreg_loss(self, x: torch.Tensor) -> torch.Tensor:
-        """Weak-SIGReg covariance penalty.
-
-        Sketches features (optional), centers them, computes covariance, and
-        penalizes distance to identity with Frobenius norm.
-        """
-        n, c = x.shape
-        sketch_dim = min(self.weak_sigreg_sketch_dim, c)
-
-        if c > sketch_dim:
-            s = torch.randn(sketch_dim, c, device=x.device, dtype=x.dtype) / math.sqrt(c)
-            x = x @ s.t()
-
-        x = x - x.mean(dim=0, keepdim=True)
-        cov = (x.t() @ x) / (n - 1 + 1e-6)
-        target = torch.eye(sketch_dim, device=x.device, dtype=x.dtype)
-        return torch.norm(cov - target, p="fro")
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         kld_weight = self._kld_weight()
