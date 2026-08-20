@@ -13,11 +13,14 @@ class BestValLossReporter(Callback):
     training, print a table of the kNN / linear-probe metrics recorded at that
     epoch together with the positive-weight temperature and Sinkhorn settings."""
 
-    def __init__(self, pos_weight_tau, sinkhorn: bool, sinkhorn_iters: int) -> None:
+    def __init__(self, pos_weight_tau, sinkhorn: bool, sinkhorn_iters: int,
+                 stats_dir: str, report_name: str) -> None:
         super().__init__()
         self.pos_weight_tau = pos_weight_tau
         self.sinkhorn = sinkhorn
         self.sinkhorn_iters = sinkhorn_iters
+        self.stats_dir = stats_dir
+        self.report_name = report_name
         self.best_val_loss = float("inf")
         self.best_epoch = None
         self.best_metrics: dict = {}
@@ -94,7 +97,14 @@ class BestValLossReporter(Callback):
             lines.append("(no kNN / linear-probe metrics were recorded)")
         lines.append("=" * max(60, sum(widths) + 3 * (len(widths) - 1)))
         lines.append("")
-        print("\n".join(lines))
+        report = "\n".join(lines)
+        print(report)
+
+        # Persist the same report next to the checkpoints under a 'stats' folder.
+        os.makedirs(self.stats_dir, exist_ok=True)
+        with open(os.path.join(self.stats_dir, self.report_name),
+                  "w", encoding="utf-8") as f:
+            f.write(report)
 
 from Models import VAE, TiltedVAE, DinoV2LoRA, ResNet18
 from dataset import VAEDataModule, ContrastiveDataModule, InatDataModule
@@ -751,6 +761,8 @@ def main() -> None:
             pos_weight_tau=pos_weight_tau,
             sinkhorn=args.sinkhorn,
             sinkhorn_iters=args.sinkhorn_iters,
+            stats_dir=os.path.join(args.output_dir, "reports"),
+            report_name=f"{ckpt_suffix}_best_val_loss_report.txt",
         ))
 
     # Trainer
