@@ -288,7 +288,7 @@ class ContrastiveExperiment(pl.LightningModule):
         split = int(n * train_fraction)
         train_idx, test_idx = perm[:split], perm[split:]
 
-        normed = F.normalize(embeddings, dim=1)
+        normed = F.normalize(embeddings, dim=1).float()
         train_e, train_l = normed[train_idx], labels[train_idx]
         test_e, test_l = normed[test_idx], labels[test_idx]
 
