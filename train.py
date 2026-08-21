@@ -25,7 +25,11 @@ class BestValLossReporter(Callback):
         self.best_epoch = None
         self.best_metrics: dict = {}
 
-    def on_validation_epoch_end(self, trainer, pl_module) -> None:
+    def on_validation_end(self, trainer, pl_module) -> None:
+        # Use on_validation_end (not on_validation_epoch_end) so that the
+        # LightningModule has already logged this epoch's kNN / linear-probe
+        # metrics; callback on_validation_epoch_end hooks run *before* the
+        # module's, so callback_metrics would otherwise hold stale values.
         if trainer.sanity_checking:
             return
         metrics = trainer.callback_metrics
