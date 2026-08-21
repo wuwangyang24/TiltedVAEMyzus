@@ -642,7 +642,14 @@ def main() -> None:
         if args.dataset == "inat" and args.superclass:
             dataset_tag += f"_{args.superclass}"
         if is_backbone:
-            model_prefix = "Backbone"
+            # "FFT" = full fine-tuning; short per-architecture tag.
+            backbone_tag = {
+                "resnet18": "ResNet18",
+                "resnet50": "ResNet50",
+                "vit_small_patch16_224": "ViTs16",
+                "swin_tiny_patch4_window7_224": "SwinT",
+            }.get(args.backbone, args.backbone)
+            model_prefix = f"FFT_{backbone_tag}"
         else:
             targets_tag = "_".join(args.lora_targets)
             model_prefix = (
