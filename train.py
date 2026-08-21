@@ -777,11 +777,27 @@ def main() -> None:
             pos_weight_tau = args.dcl_soft_pos_tau
         else:
             pos_weight_tau = "n/a"
+
+        # Organise reports under <model>/<dataset>/ (e.g. resnet18/mammals/).
+        if is_backbone:
+            model_folder = {
+                "resnet18": "resnet18",
+                "resnet50": "resnet50",
+                "vit_small_patch16_224": "vits16",
+                "swin_tiny_patch4_window7_224": "swint",
+            }.get(args.backbone, args.backbone)
+        else:
+            model_folder = "dino_lora"
+        if args.dataset == "inat":
+            dataset_folder = args.superclass or f"{args.train_cat}_to_{'-'.join(args.test_cat)}"
+        else:
+            dataset_folder = args.dataset
+
         callbacks.append(BestValLossReporter(
             pos_weight_tau=pos_weight_tau,
             sinkhorn=args.sinkhorn,
             sinkhorn_iters=args.sinkhorn_iters,
-            stats_dir=os.path.join(args.output_dir, "reports"),
+            stats_dir=os.path.join(args.output_dir, "reports", model_folder, dataset_folder),
             report_name=f"{ckpt_suffix}_best_val_loss_report.txt",
         ))
 
