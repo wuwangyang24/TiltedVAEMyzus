@@ -110,6 +110,29 @@ class BestValLossReporter(Callback):
                   "w", encoding="utf-8") as f:
             f.write(report)
 
+        # Regenerate the dataset's Excel workbook from every report in this
+        # folder so it fills in as Vanilla / per-τ runs complete. Optional:
+        # skipped cleanly if openpyxl (or the generator) is unavailable.
+        if trainer.is_global_zero:
+            try:
+                from generate_reports import collect_dataset, build_workbook
+                report_paths = [
+                    os.path.join(self.stats_dir, f)
+                    for f in os.listdir(self.stats_dir)
+                    if f.endswith("_best_val_loss_report.txt")
+                ]
+                by_kind = collect_dataset(report_paths)
+                if by_kind:
+                    dataset_name = os.path.basename(self.stats_dir.rstrip(os.sep))
+                    model_name = os.path.basename(
+                        os.path.dirname(self.stats_dir.rstrip(os.sep)))
+                    out_path = os.path.join(
+                        self.stats_dir, f"{model_name}_{dataset_name}_metrics.xlsx")
+                    build_workbook(by_kind, out_path)
+                    print(f"[report] wrote Excel workbook: {out_path}")
+            except Exception as e:  # noqa: BLE001 - reporting must not break training
+                print(f"[report] skipped Excel workbook generation: {e}")
+
 from Models import VAE, TiltedVAE, DinoV2LoRA, Backbone
 from dataset import VAEDataModule, ContrastiveDataModule, InatDataModule
 from experiment import VAEExperiment
