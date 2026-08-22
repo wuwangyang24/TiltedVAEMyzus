@@ -27,7 +27,8 @@ from openpyxl.utils import get_column_letter
 
 
 # ── Fixed layout (from the task specification) ────────────────────────────────
-TAU_ROWS = [0.1, 0.3, 0.5, 0.7, 1.0, 1.5]
+# τ rows are discovered dynamically from the reports (see build_workbook);
+# every τ found is included, sorted ascending, with Vanilla last.
 
 # Worksheet name -> the eval-prefix suffix to look up in the parsed report
 # (matches val_train_order, val_test_family, val_test_genus,
@@ -130,7 +131,7 @@ def _find_metrics(metrics: dict, suffix: str):
     return None
 
 
-def build_worksheet(ws, suffix: str, by_kind: dict):
+def build_worksheet(ws, suffix: str, by_kind: dict, tau_rows):
     center = Alignment(horizontal="center", vertical="center")
 
     header = ["\u03c4 / Method"] + [c[0] for c in METRIC_COLUMNS]
@@ -140,8 +141,8 @@ def build_worksheet(ws, suffix: str, by_kind: dict):
         cell.alignment = center
 
     # Assemble the raw scores (×100) for each row and metric.
-    row_labels = [f"\u03c4 = {tau:g}" for tau in TAU_ROWS] + ["Vanilla"]
-    kinds = TAU_ROWS + ["vanilla"]
+    row_labels = [f"\u03c4 = {tau:g}" for tau in tau_rows] + ["Vanilla"]
+    kinds = list(tau_rows) + ["vanilla"]
 
     vanilla_metrics = _find_metrics(by_kind.get("vanilla", {}), suffix) or {}
     baseline = {
@@ -209,11 +210,14 @@ def build_worksheet(ws, suffix: str, by_kind: dict):
 
 
 def build_workbook(by_kind: dict, out_path: str):
+    # τ rows are discovered from the reports (sorted ascending); Vanilla is
+    # always rendered last as the baseline row.
+    tau_rows = sorted(k for k in by_kind if k != "vanilla")
     wb = Workbook()
     wb.remove(wb.active)
     for sheet_name, suffix in WORKSHEETS:
         ws = wb.create_sheet(title=sheet_name)
-        build_worksheet(ws, suffix, by_kind)
+        build_worksheet(ws, suffix, by_kind, tau_rows)
     wb.save(out_path)
 
 
