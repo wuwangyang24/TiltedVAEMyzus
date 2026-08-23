@@ -22,6 +22,7 @@ except ImportError:  # pragma: no cover - timm is a declared dependency
 # Supported fully fine-tuned backbones (timm model ids).
 _SUPPORTED_BACKBONES = (
     "resnet18", "resnet50", "vit_small_patch16_224", "swin_tiny_patch4_window7_224",
+    "convnext_tiny",
 )
 
 
@@ -35,8 +36,8 @@ class Backbone(nn.Module):
     replacement inside :class:`ContrastiveExperiment`.
 
     Despite the class name, the ``backbone`` argument selects which timm model to
-    fine-tune (``resnet18``, ``resnet50``, ``vit_small_patch16_224`` or
-    ``swin_tiny_patch4_window7_224``).
+    fine-tune (``resnet18``, ``resnet50``, ``vit_small_patch16_224``,
+    ``swin_tiny_patch4_window7_224`` or ``convnext_tiny``).
 
     Args:
         backbone: timm model id to fully fine-tune (see ``_SUPPORTED_BACKBONES``).

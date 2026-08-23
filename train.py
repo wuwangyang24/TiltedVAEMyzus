@@ -210,10 +210,10 @@ def parse_args() -> argparse.Namespace:
                         help="DINOv2 backbone variant to adapt with LoRA")
     parser.add_argument("--backbone", type=str, default="resnet18",
                         choices=["resnet18", "resnet50", "vit_small_patch16_224",
-                                 "swin_tiny_patch4_window7_224"],
+                                 "swin_tiny_patch4_window7_224", "convnext_tiny"],
                         help="Backbone to fully fine-tune when --model backbone: "
-                             "'resnet18', 'resnet50', 'vit_small_patch16_224' or "
-                             "'swin_tiny_patch4_window7_224'")
+                             "'resnet18', 'resnet50', 'vit_small_patch16_224', "
+                             "'swin_tiny_patch4_window7_224' or 'convnext_tiny'")
     parser.add_argument("--embedding_dim", type=int, default=256,
                         help="Projected embedding dimension for the contrastive head")
     parser.add_argument("--proj_hidden_dim", type=int, default=2048,
@@ -675,6 +675,7 @@ def main() -> None:
                 "resnet50": "ResNet50",
                 "vit_small_patch16_224": "ViTs16",
                 "swin_tiny_patch4_window7_224": "SwinT",
+                "convnext_tiny": "ConvNeXtT",
             }.get(args.backbone, args.backbone)
             model_prefix = f"FFT_{backbone_tag}"
         else:
