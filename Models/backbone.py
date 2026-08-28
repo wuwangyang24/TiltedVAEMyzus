@@ -73,6 +73,7 @@ class Backbone(nn.Module):
                  supcon_denom_pos_weight: bool = False,
                  sinkhorn: bool = False,
                  sinkhorn_iters: int = 5,
+                 grad_checkpointing: bool = False,
                  pretrained: bool = True) -> None:
         super().__init__()
 
@@ -101,6 +102,11 @@ class Backbone(nn.Module):
             create_kwargs["img_size"] = img_size
         self.backbone = timm.create_model(backbone, **create_kwargs)
         feat_dim = self.backbone.num_features
+
+        # Trade compute for memory: recompute backbone activations in the
+        # backward pass instead of storing them (allows larger batches).
+        if grad_checkpointing:
+            self.backbone.set_grad_checkpointing(enable=True)
 
         # Trainable projection head mapping backbone features -> embedding space.
         if self.use_proj_head:
