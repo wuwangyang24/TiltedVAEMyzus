@@ -163,6 +163,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--superclass", type=str, default=None,
                         help="Keep only iNat categories whose 'supercategory' matches "
                              "this value (e.g. Plants, Insects). inat only.")
+    parser.add_argument("--P_class", type=str, default=None,
+                        choices=["order", "family", "genus", "specific_epithet"],
+                        help="Taxonomy level used to draw the P distinct classes for "
+                             "P x K sampling (inat only). Defaults to --train_cat. Lets "
+                             "you sample P groups at one level while the contrastive "
+                             "loss still uses --train_cat labels.")
     parser.add_argument("--inat_train_metadata", type=str, default="train_mini.json",
                         help="Path to iNat2021 train metadata JSON")
     parser.add_argument("--inat_val_metadata", type=str, default="val.json",
@@ -483,6 +489,7 @@ def main() -> None:
                 classes_per_batch=args.contrastive_classes_per_batch,
                 samples_per_class=args.contrastive_samples_per_class,
                 superclass=args.superclass,
+                p_class=args.P_class,
                 seed=args.seed,
             )
         else:
@@ -668,6 +675,8 @@ def main() -> None:
         dataset_tag = f"_inat_{args.train_cat}->{test_cat_tag}" if args.dataset == "inat" else ""
         if args.dataset == "inat" and args.superclass:
             dataset_tag += f"_{args.superclass}"
+        if args.dataset == "inat" and args.P_class:
+            dataset_tag += f"_P-{args.P_class}"
         if is_backbone:
             # "FFT" = full fine-tuning; short per-architecture tag.
             backbone_tag = {
