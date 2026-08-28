@@ -178,7 +178,8 @@ class ContrastiveExperiment(pl.LightningModule):
             "train_loss", loss_dict["loss"],
             on_step=True, on_epoch=True, prog_bar=True,
         )
-        for key in ("suspicion_mean", "suspicion_same_testcat", "suspicion_diff_testcat",
+        for key in ("pos_fraction",
+                    "suspicion_mean", "suspicion_same_testcat", "suspicion_diff_testcat",
                     "pos_weight_same_testcat", "pos_weight_diff_testcat",
                     "pos_weight_testcat_ratio"):
             if key in loss_dict:
@@ -196,7 +197,8 @@ class ContrastiveExperiment(pl.LightningModule):
             "val_loss", loss_dict["loss"],
             on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
         )
-        for key in ("pos_weight_same_testcat", "pos_weight_diff_testcat",
+        for key in ("pos_fraction",
+                    "pos_weight_same_testcat", "pos_weight_diff_testcat",
                     "pos_weight_testcat_ratio"):
             if key in loss_dict:
                 self.log(f"val_{key}", loss_dict[key], on_step=False, on_epoch=True,
