@@ -106,7 +106,8 @@ class Backbone(nn.Module):
         # Trade compute for memory: recompute backbone activations in the
         # backward pass instead of storing them (allows larger batches).
         if grad_checkpointing:
-            self.backbone.set_grad_checkpointing(enable=True)
+            from .grad_checkpoint import enable_grad_checkpointing
+            enable_grad_checkpointing(self.backbone)
 
         # Trainable projection head mapping backbone features -> embedding space.
         if self.use_proj_head:
