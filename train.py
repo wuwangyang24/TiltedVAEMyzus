@@ -24,7 +24,6 @@ class BestValLossReporter(Callback):
         self.best_val_loss = float("inf")
         self.best_epoch = None
         self.best_metrics: dict = {}
-        self.best_cophenetic: dict = {}
 
     def on_validation_end(self, trainer, pl_module) -> None:
         # Use on_validation_end (not on_validation_epoch_end) so that the
@@ -45,11 +44,6 @@ class BestValLossReporter(Callback):
                 k: float(v)
                 for k, v in metrics.items()
                 if ("knn_top" in k or "linprobe_top" in k)
-            }
-            self.best_cophenetic = {
-                k: float(v)
-                for k, v in metrics.items()
-                if "cophenetic" in k
             }
 
     def on_fit_end(self, trainer, pl_module) -> None:
@@ -105,14 +99,6 @@ class BestValLossReporter(Callback):
             lines.extend(render(r) for r in rows)
         else:
             lines.append("(no kNN / linear-probe metrics were recorded)")
-        if self.best_cophenetic:
-            width = max(60, sum(widths) + 3 * (len(widths) - 1))
-            lines.append("-" * width)
-            lines.append("Cophenetic correlation (embeddings vs. taxonomy):")
-            lines.append(f"  Spearman:   {fmt(self.best_cophenetic.get('val_cophenetic_spearman'))}")
-            lines.append(f"  Pearson:    {fmt(self.best_cophenetic.get('val_cophenetic_pearson'))}")
-            lines.append(f"  CPCC:       {fmt(self.best_cophenetic.get('val_cophenetic_cpcc'))}")
-            lines.append(f"  Dendro-Tax: {fmt(self.best_cophenetic.get('val_cophenetic_dendro_tax'))}")
         lines.append("=" * max(60, sum(widths) + 3 * (len(widths) - 1)))
         lines.append("")
         report = "\n".join(lines)
@@ -177,12 +163,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--superclass", type=str, default=None,
                         help="Keep only iNat categories whose 'supercategory' matches "
                              "this value (e.g. Plants, Insects). inat only.")
-    parser.add_argument("--P_class", type=str, default=None,
-                        choices=["order", "family", "genus", "specific_epithet"],
-                        help="Taxonomy level used to draw the P distinct classes for "
-                             "P x K sampling (inat only). Defaults to --train_cat. Lets "
-                             "you sample P groups at one level while the contrastive "
-                             "loss still uses --train_cat labels.")
     parser.add_argument("--inat_train_metadata", type=str, default="train_mini.json",
                         help="Path to iNat2021 train metadata JSON")
     parser.add_argument("--inat_val_metadata", type=str, default="val.json",
@@ -250,10 +230,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use_proj_head", action="store_true",
                         help="Use the projection head on top of the backbone features. "
                              "If not set, the backbone features are directly L2-normalized.")
-    parser.add_argument("--grad_checkpointing", action="store_true",
-                        help="Enable gradient checkpointing on the backbone to trade "
-                             "compute for memory (allows larger batches). Only used "
-                             "with --model backbone.")
 
     # Contrastive dataset (synthesis-program labels; only used when --model dino_lora)
     parser.add_argument("--contrastive_metadata", type=str, nargs="+", default=None,
@@ -507,7 +483,6 @@ def main() -> None:
                 classes_per_batch=args.contrastive_classes_per_batch,
                 samples_per_class=args.contrastive_samples_per_class,
                 superclass=args.superclass,
-                p_class=args.P_class,
                 seed=args.seed,
             )
         else:
@@ -569,7 +544,6 @@ def main() -> None:
                 supcon_denom_pos_weight=args.denominator_pos_weight,
                 sinkhorn=args.sinkhorn,
                 sinkhorn_iters=args.sinkhorn_iters,
-                grad_checkpointing=args.grad_checkpointing,
             )
         else:
             model = DinoV2LoRA(
@@ -694,8 +668,6 @@ def main() -> None:
         dataset_tag = f"_inat_{args.train_cat}->{test_cat_tag}" if args.dataset == "inat" else ""
         if args.dataset == "inat" and args.superclass:
             dataset_tag += f"_{args.superclass}"
-        if args.dataset == "inat" and args.P_class:
-            dataset_tag += f"_P-{args.P_class}"
         if is_backbone:
             # "FFT" = full fine-tuning; short per-architecture tag.
             backbone_tag = {

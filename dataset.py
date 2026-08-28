@@ -738,8 +738,6 @@ class InatDataModule(pl.LightningDataModule):
         num_workers: DataLoader workers
         classes_per_batch: P for P x K sampling (0 disables)
         samples_per_class: K for P x K sampling
-        p_class: taxonomy level to draw the P classes from for P x K sampling
-            (e.g. 'family'). Defaults to ``train_cat`` when None.
         seed: RNG seed
     """
 
@@ -756,7 +754,6 @@ class InatDataModule(pl.LightningDataModule):
                  classes_per_batch: int = 0,
                  samples_per_class: int = 0,
                  superclass: Optional[str] = None,
-                 p_class: Optional[str] = None,
                  seed: int = 42) -> None:
         super().__init__()
         self.train_metadata = train_metadata
@@ -766,7 +763,6 @@ class InatDataModule(pl.LightningDataModule):
         self.train_cat = train_cat
         self.test_cats = [test_cat] if isinstance(test_cat, str) else list(test_cat)
         self.superclass = superclass
-        self.p_class = p_class
         self.img_size = img_size
         self.batch_size = batch_size
         self.num_workers = num_workers
@@ -777,7 +773,6 @@ class InatDataModule(pl.LightningDataModule):
         self.train_classes: List[str] = []
         self.test_classes: List[List[str]] = []
         self._train_labels: List[int] = []
-        self._train_pk_labels: List[int] = []
         self._val_labels: List[int] = []
         self.train_dataset: Optional[Dataset] = None
         self.val_dataset: Optional[Dataset] = None
@@ -804,17 +799,13 @@ class InatDataModule(pl.LightningDataModule):
     @staticmethod
     def _parse_inat_json(metadata_path: str, image_dir: str,
                          train_cat: str, test_cats: List[str],
-                         superclass: Optional[str] = None,
-                         pk_cat: Optional[str] = None
-                         ) -> List[Tuple[str, str, Tuple[str, ...], Optional[str]]]:
-        """Parse iNat2021 COCO-style JSON, return (path, train_cat_value,
-        test_cat_values, pk_cat_value).
+                         superclass: Optional[str] = None
+                         ) -> List[Tuple[str, str, Tuple[str, ...]]]:
+        """Parse iNat2021 COCO-style JSON, return (path, train_cat_value, test_cat_values).
 
         ``test_cat_values`` is a tuple with one taxonomy value per level in
-        ``test_cats``. ``pk_cat_value`` is the taxonomy value at ``pk_cat``
-        (used for P x K sampling) or ``None`` when ``pk_cat`` is not given. If
-        ``superclass`` is given, only categories whose ``supercategory`` field
-        matches it (case-insensitive) are kept.
+        ``test_cats``. If ``superclass`` is given, only categories whose
+        ``supercategory`` field matches it (case-insensitive) are kept.
         """
         with open(metadata_path) as f:
             data = json.load(f)
@@ -843,24 +834,19 @@ class InatDataModule(pl.LightningDataModule):
             test_vals = tuple(cat_info.get(tc) for tc in test_cats)
             if train_val is None or any(v is None for v in test_vals):
                 continue
-            pk_val = cat_info.get(pk_cat) if pk_cat is not None else None
-            if pk_cat is not None and pk_val is None:
-                continue
             file_name = img_map[img_id]
             full_path = os.path.join(image_dir, file_name)
-            samples.append((full_path, str(train_val),
-                            tuple(str(v) for v in test_vals),
-                            str(pk_val) if pk_val is not None else None))
+            samples.append((full_path, str(train_val), tuple(str(v) for v in test_vals)))
 
         return samples
 
     def setup(self, stage: Optional[str] = None) -> None:
         train_raw = self._parse_inat_json(
             self.train_metadata, self.train_image_dir,
-            self.train_cat, self.test_cats, self.superclass, self.p_class)
+            self.train_cat, self.test_cats, self.superclass)
         val_raw = self._parse_inat_json(
             self.val_metadata, self.val_image_dir,
-            self.train_cat, self.test_cats, self.superclass, self.p_class)
+            self.train_cat, self.test_cats, self.superclass)
 
         # Build unified label encodings across both splits
         all_train_cats = sorted(set(s[1] for s in train_raw + val_raw))
@@ -880,7 +866,7 @@ class InatDataModule(pl.LightningDataModule):
             return [
                 (p, train_cat2idx[tc],
                  tuple(test_cat2idx[i][ec[i]] for i in range(len(self.test_cats))))
-                for p, tc, ec, _pk in raw
+                for p, tc, ec in raw
             ]
 
         train_samples = encode(train_raw)
@@ -891,15 +877,6 @@ class InatDataModule(pl.LightningDataModule):
 
         self._train_labels = [s[1] for s in train_samples]
         self._val_labels = [s[1] for s in val_samples]
-
-        # Labels driving P x K sampling: a separate --P_class taxonomy level
-        # when requested, otherwise the contrastive (train_cat) labels.
-        if self.p_class is not None:
-            all_pk_cats = sorted(set(s[3] for s in train_raw + val_raw))
-            pk_cat2idx = {c: i for i, c in enumerate(all_pk_cats)}
-            self._train_pk_labels = [pk_cat2idx[s[3]] for s in train_raw]
-        else:
-            self._train_pk_labels = self._train_labels
 
         transform = self._build_transform()
         self.train_dataset = InatContrastiveDataset(train_samples, transform)
@@ -912,7 +889,6 @@ class InatDataModule(pl.LightningDataModule):
             f"[InatDataModule] superclass={self.superclass}, "
             f"train_cat='{self.train_cat}' ({self.num_train_classes} classes), "
             f"test_cats=[{test_summary}], "
-            f"P_class={self.p_class or self.train_cat}, "
             f"images: train={len(train_samples)}, val={len(val_samples)}",
             flush=True,
         )
@@ -920,7 +896,7 @@ class InatDataModule(pl.LightningDataModule):
     def train_dataloader(self) -> DataLoader:
         if self.use_pk_sampler:
             batch_sampler = PKBatchSampler(
-                labels=self._train_pk_labels,
+                labels=self._train_labels,
                 classes_per_batch=self.classes_per_batch,
                 samples_per_class=self.samples_per_class,
                 seed=self.seed,
