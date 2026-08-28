@@ -168,20 +168,12 @@ class ContrastiveExperiment(pl.LightningModule):
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         loss_dict, _, _, _ = self._step(batch)
-        if self.supcon_softpos:
-            self.log("train_supcon_tau", self._current_supcon_tau(),
-                     on_step=False, on_epoch=True)
-        if self.supcon_softpos or self.infonce_softpos:
-            self.log("train_pos_weight_active", float(self._use_pos_weighting()),
-                     on_step=False, on_epoch=True)
         self.log(
             "train_loss", loss_dict["loss"],
             on_step=True, on_epoch=True, prog_bar=True,
         )
         for key in ("pos_fraction",
-                    "suspicion_mean", "suspicion_same_testcat", "suspicion_diff_testcat",
-                    "pos_weight_same_testcat", "pos_weight_diff_testcat",
-                    "pos_weight_testcat_ratio"):
+                    "suspicion_mean", "suspicion_same_testcat", "suspicion_diff_testcat"):
             if key in loss_dict:
                 self.log(f"train_{key}", loss_dict[key], on_step=True, on_epoch=True)
         return loss_dict["loss"]
@@ -197,9 +189,7 @@ class ContrastiveExperiment(pl.LightningModule):
             "val_loss", loss_dict["loss"],
             on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
         )
-        for key in ("pos_fraction",
-                    "pos_weight_same_testcat", "pos_weight_diff_testcat",
-                    "pos_weight_testcat_ratio"):
+        for key in ("pos_fraction",):
             if key in loss_dict:
                 self.log(f"val_{key}", loss_dict[key], on_step=False, on_epoch=True,
                          sync_dist=True)
@@ -245,6 +235,21 @@ class ContrastiveExperiment(pl.LightningModule):
                 f"val_test_{name}", prog_bar=(i == 0),
             )
 
+        # Cophenetic correlation between the embedding geometry and the taxonomy
+        # defined by the --test_cat levels (assumed ordered coarse -> fine).
+        if val_test_labels.size(1) >= 2:
+            coph = self._cophenetic_correlation(val_embeddings, val_test_labels)
+            if coph is not None:
+                self.log_dict(
+                    {
+                        "val_cophenetic_spearman": coph["spearman"],
+                        "val_cophenetic_pearson": coph["pearson"],
+                        "val_cophenetic_cpcc": coph["cpcc"],
+                        "val_cophenetic_dendro_tax": coph["dendro_tax"],
+                    },
+                    prog_bar=False, sync_dist=False,
+                )
+
     def _eval_and_log(self, embeddings: torch.Tensor, labels: torch.Tensor,
                       prefix: str, prog_bar: bool = False) -> None:
         """Compute top-1/5 kNN and linear-probe accuracy for one label set."""
@@ -259,6 +264,71 @@ class ContrastiveExperiment(pl.LightningModule):
             },
             prog_bar=prog_bar, sync_dist=False,
         )
+
+    @staticmethod
+    @torch.no_grad()
+    def _cophenetic_correlation(
+        embeddings: torch.Tensor, levels: torch.Tensor,
+        max_samples: int = 2048, seed: int = 42,
+        metric: str = "cosine", linkage_method: str = "average",
+    ) -> Optional[Dict[str, float]]:
+        """Cophenetic correlation between embedding distances and the taxonomy.
+
+        ``levels`` is an (N, L) integer tensor of taxonomy ranks ordered
+        coarse -> fine; the ground-truth ultrametric distance between two
+        samples is ``L`` minus the depth of their lowest common ancestor
+        (found by cumulative-prefix matching so equal rank labels under
+        different ancestors do not merge). Correlates that against the pairwise
+        embedding distances and returns Spearman/Pearson plus the classic
+        cophenetic correlation coefficient (CPCC) of an agglomerative
+        dendrogram and its Spearman correlation with the taxonomy. Subsampled
+        to ``max_samples`` to bound the O(N^2) cost; returns ``None`` when
+        SciPy is unavailable or there are too few points/ranks.
+        """
+        try:
+            from scipy.cluster.hierarchy import cophenet, linkage
+            from scipy.spatial.distance import pdist, squareform
+            from scipy.stats import pearsonr, spearmanr
+        except Exception:
+            return None
+
+        n, num_levels = levels.shape
+        if n < 3 or num_levels < 2:
+            return None
+
+        lvl = levels.detach().cpu().numpy()
+        emb = embeddings
+        if n > max_samples:
+            rng = np.random.RandomState(seed)
+            idx = rng.choice(n, size=max_samples, replace=False)
+            emb = emb[idx]
+            lvl = lvl[idx]
+            n = max_samples
+
+        # Ground-truth ultrametric distance from the taxonomy tree.
+        lca_depth = np.zeros((n, n), dtype=np.int32)
+        for r in range(num_levels):
+            _, codes = np.unique(lvl[:, : r + 1], axis=0, return_inverse=True)
+            codes = codes.reshape(-1)
+            lca_depth += (codes[:, None] == codes[None, :]).astype(np.int32)
+        coph = (num_levels - lca_depth).astype(np.float64)
+        np.fill_diagonal(coph, 0.0)
+        tax_condensed = squareform(coph, checks=False)
+
+        x = F.normalize(emb, dim=1).detach().cpu().numpy()
+        emb_condensed = pdist(x, metric=metric)
+
+        spearman_r, _ = spearmanr(emb_condensed, tax_condensed)
+        pearson_r, _ = pearsonr(emb_condensed, tax_condensed)
+        z = linkage(emb_condensed, method=linkage_method)
+        cpcc, coph_dists = cophenet(z, emb_condensed)
+        dendro_tax_r, _ = spearmanr(coph_dists, tax_condensed)
+        return {
+            "spearman": float(spearman_r),
+            "pearson": float(pearson_r),
+            "cpcc": float(cpcc),
+            "dendro_tax": float(dendro_tax_r),
+        }
 
     @staticmethod
     def _gather_across_ranks(tensor: torch.Tensor) -> torch.Tensor:
