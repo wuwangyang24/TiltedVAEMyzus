@@ -243,6 +243,21 @@ class ContrastiveExperiment(pl.LightningModule):
                 f"val_test_{name}", prog_bar=(i == 0),
             )
 
+        # Cophenetic correlation between embeddings and the taxonomy tree.
+        # Needs at least two ranks to define a non-trivial hierarchy.
+        if val_test_labels.size(1) >= 2:
+            coph = self._cophenetic_correlation(val_embeddings, val_test_labels)
+            if coph is not None:
+                self.log_dict(
+                    {
+                        "val_cophenetic_spearman": coph["spearman"],
+                        "val_cophenetic_pearson": coph["pearson"],
+                        "val_cophenetic_cpcc": coph["cpcc"],
+                        "val_cophenetic_dendro_tax": coph["dendro_tax"],
+                    },
+                    prog_bar=False, sync_dist=False,
+                )
+
     def _eval_and_log(self, embeddings: torch.Tensor, labels: torch.Tensor,
                       prefix: str, prog_bar: bool = False) -> None:
         """Compute top-1/5 kNN and linear-probe accuracy for one label set."""
@@ -268,6 +283,68 @@ class ContrastiveExperiment(pl.LightningModule):
         gathered: list = [None] * world_size
         torch.distributed.all_gather_object(gathered, tensor.cpu())
         return torch.cat([t.to(tensor.device) for t in gathered], dim=0)
+
+    @staticmethod
+    @torch.no_grad()
+    def _cophenetic_correlation(
+        embeddings: torch.Tensor, levels: torch.Tensor,
+        max_samples: int = 2048, seed: int = 42,
+        metric: str = "cosine", linkage_method: str = "average",
+    ) -> Optional[Dict[str, float]]:
+        """Correlate pairwise embedding distances with the taxonomy tree.
+
+        ``levels`` is an (N, R) integer tensor of taxonomy codes ordered coarse
+        -> fine. The ground-truth cophenetic distance between two samples is
+        ``R - depth(LCA)``, where the LCA depth counts leading ranks whose full
+        ancestral prefix matches. Returns None if scipy is unavailable or there
+        are too few samples/ranks to form a hierarchy.
+        """
+        try:
+            from scipy.cluster.hierarchy import linkage, cophenet
+            from scipy.spatial.distance import pdist, squareform
+            from scipy.stats import spearmanr, pearsonr
+        except ImportError:
+            return None
+
+        lvl = levels.detach().cpu().numpy()
+        X = embeddings.detach().cpu().float().numpy()
+        n, num_levels = lvl.shape
+        if n < 3 or num_levels < 2:
+            return None
+
+        # Subsample for tractable O(n^2) pairwise distances.
+        if n > max_samples:
+            rng = np.random.RandomState(seed)
+            idx = rng.choice(n, size=max_samples, replace=False)
+            X = X[idx]
+            lvl = lvl[idx]
+            n = max_samples
+
+        # Ground-truth ultrametric via cumulative-prefix LCA depth.
+        lca_depth = np.zeros((n, n), dtype=np.int32)
+        for r in range(num_levels):
+            _, codes = np.unique(lvl[:, : r + 1], axis=0, return_inverse=True)
+            lca_depth += (codes[:, None] == codes[None, :]).astype(np.int32)
+        tax = (num_levels - lca_depth).astype(np.float64)
+        np.fill_diagonal(tax, 0.0)
+        tax_condensed = squareform(tax, checks=False)
+
+        emb_condensed = pdist(X, metric=metric)
+        if not np.isfinite(emb_condensed).all() or emb_condensed.std() == 0:
+            return None
+
+        spearman_r, _ = spearmanr(emb_condensed, tax_condensed)
+        pearson_r, _ = pearsonr(emb_condensed, tax_condensed)
+        Z = linkage(emb_condensed, method=linkage_method)
+        cpcc, coph_dists = cophenet(Z, emb_condensed)
+        dendro_tax_r, _ = spearmanr(coph_dists, tax_condensed)
+
+        return {
+            "spearman": float(spearman_r),
+            "pearson": float(pearson_r),
+            "cpcc": float(cpcc),
+            "dendro_tax": float(dendro_tax_r),
+        }
 
     @staticmethod
     @torch.no_grad()

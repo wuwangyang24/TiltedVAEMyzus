@@ -24,6 +24,7 @@ class BestValLossReporter(Callback):
         self.best_val_loss = float("inf")
         self.best_epoch = None
         self.best_metrics: dict = {}
+        self.best_cophenetic: dict = {}
 
     def on_validation_end(self, trainer, pl_module) -> None:
         # Use on_validation_end (not on_validation_epoch_end) so that the
@@ -44,6 +45,11 @@ class BestValLossReporter(Callback):
                 k: float(v)
                 for k, v in metrics.items()
                 if ("knn_top" in k or "linprobe_top" in k)
+            }
+            self.best_cophenetic = {
+                k: float(v)
+                for k, v in metrics.items()
+                if "cophenetic" in k
             }
 
     def on_fit_end(self, trainer, pl_module) -> None:
@@ -99,6 +105,14 @@ class BestValLossReporter(Callback):
             lines.extend(render(r) for r in rows)
         else:
             lines.append("(no kNN / linear-probe metrics were recorded)")
+        if self.best_cophenetic:
+            width = max(60, sum(widths) + 3 * (len(widths) - 1))
+            lines.append("-" * width)
+            lines.append("Cophenetic correlation (embeddings vs. taxonomy):")
+            lines.append(f"  Spearman:   {fmt(self.best_cophenetic.get('val_cophenetic_spearman'))}")
+            lines.append(f"  Pearson:    {fmt(self.best_cophenetic.get('val_cophenetic_pearson'))}")
+            lines.append(f"  CPCC:       {fmt(self.best_cophenetic.get('val_cophenetic_cpcc'))}")
+            lines.append(f"  Dendro-Tax: {fmt(self.best_cophenetic.get('val_cophenetic_dendro_tax'))}")
         lines.append("=" * max(60, sum(widths) + 3 * (len(widths) - 1)))
         lines.append("")
         report = "\n".join(lines)
