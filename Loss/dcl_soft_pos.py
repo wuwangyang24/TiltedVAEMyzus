@@ -50,6 +50,7 @@ class DCLSoftPosLoss(nn.Module):
 
     def forward(self, embeddings: Tensor, labels: Tensor,
                 temperature: float = 0.1,
+                pos_weight_sim: Optional[Tensor] = None,
                 test_labels: Optional[Tensor] = None,
                 **kwargs) -> Dict[str, Tensor]:
         temperature = kwargs.get("temperature", temperature)
@@ -71,7 +72,10 @@ class DCLSoftPosLoss(nn.Module):
         sim = normed @ normed.t() / temperature
 
         # --- Soft-weighted positive term ---
-        raw_cos = normed @ normed.t()
+        # When ``pos_weight_sim`` is supplied (e.g. cosine similarities from an
+        # EMA "teacher" copy of the model), it drives the positive weights
+        # instead of the online embeddings' own similarities.
+        raw_cos = normed @ normed.t() if pos_weight_sim is None else pos_weight_sim
         pos_weight_logits = raw_cos / self.pos_weight_tau
         if self.sinkhorn:
             pos_weights = (pos_weight_logits.exp()) * pos_mask

@@ -48,6 +48,7 @@ class SupConSoftPosLoss(nn.Module):
                 pos_weight_tau: Optional[float] = None,
                 use_pos_weighting: bool = True,
                 denom_pos_weight: Optional[bool] = None,
+                pos_weight_sim: Optional[Tensor] = None,
                 test_labels: Optional[Tensor] = None,
                 **kwargs) -> Dict[str, Tensor]:
         temperature = kwargs.get("temperature", temperature)
@@ -72,7 +73,10 @@ class SupConSoftPosLoss(nn.Module):
         logits = logits - logits.max(dim=1, keepdim=True).values.detach()
 
         # --- Soft positive weights (same scheme as DCLSoftPos) ---
-        raw_cos = normed @ normed.t()
+        # When ``pos_weight_sim`` is supplied (e.g. cosine similarities from an
+        # EMA "teacher" copy of the model), it drives the positive weights
+        # instead of the online embeddings' own similarities.
+        raw_cos = normed @ normed.t() if pos_weight_sim is None else pos_weight_sim
         if not use_pos_weighting:
             pos_weights = pos_mask / pos_per_anchor.clamp(min=1).unsqueeze(1)
         else:

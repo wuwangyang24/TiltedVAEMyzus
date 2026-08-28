@@ -1,5 +1,7 @@
 from typing import Any, Dict, Optional, Tuple
 
+import copy
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -50,6 +52,8 @@ class ContrastiveExperiment(pl.LightningModule):
                  sinkhorn_iters: int = 5,
                  sigreg_weight: float = 0.1,
                  sigreg_slices: int = 512,
+                 EMA_pos_weight: bool = False,
+                 EMA_momentum: float = 0.999,
                  train_cat: str = "train",
                  test_cats: Optional[list] = None) -> None:
         super().__init__()
@@ -83,7 +87,49 @@ class ContrastiveExperiment(pl.LightningModule):
         self.sigreg_slices = sigreg_slices
         self.train_cat = train_cat
         self.test_cats = list(test_cats) if test_cats else ["test"]
+
+        # Optional EMA "teacher": a momentum-updated copy of the model whose
+        # embeddings drive the soft-positive weights (decoupling the positive
+        # weighting from the noisy online embeddings).
+        if not 0.0 <= EMA_momentum < 1.0:
+            raise ValueError("EMA_momentum must be in [0, 1)")
+        self.EMA_pos_weight = EMA_pos_weight
+        self.EMA_momentum = EMA_momentum
+        if EMA_pos_weight:
+            self.ema_model = copy.deepcopy(model)
+            for p in self.ema_model.parameters():
+                p.requires_grad_(False)
+            self.ema_model.eval()
+        else:
+            self.ema_model = None
+
         self.save_hyperparameters(ignore=["model"])
+
+    def train(self, mode: bool = True):
+        # Keep the EMA teacher in eval mode regardless of the module's mode.
+        super().train(mode)
+        if self.ema_model is not None:
+            self.ema_model.eval()
+        return self
+
+    @torch.no_grad()
+    def _update_ema(self) -> None:
+        m = self.EMA_momentum
+        for ema_p, p in zip(self.ema_model.parameters(), self.model.parameters()):
+            ema_p.mul_(m).add_(p.detach(), alpha=1.0 - m)
+        for ema_b, b in zip(self.ema_model.buffers(), self.model.buffers()):
+            ema_b.copy_(b)
+
+    @torch.no_grad()
+    def _ema_pos_weight_sim(self, images: torch.Tensor) -> Optional[torch.Tensor]:
+        """Cosine-similarity matrix from the EMA teacher's embeddings, used to
+        drive the soft-positive weights. Returns None when EMA weighting is off
+        or the current epoch still uses uniform positive weights."""
+        if not self.EMA_pos_weight or not self._use_pos_weighting():
+            return None
+        ema_emb = self.ema_model(images)  # normalized embeddings
+        return ema_emb @ ema_emb.t()
+
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
@@ -120,6 +166,7 @@ class ContrastiveExperiment(pl.LightningModule):
             embeddings = self.model(images)
             loss_dict = self.model.dcl_soft_pos_loss_function(
                 embeddings, labels, temperature=self.temperature,
+                pos_weight_sim=self._ema_pos_weight_sim(images),
                 test_labels=loss_test_labels)
         elif self.dcl_sigreg_loss:
             embeddings = self.model(images, normalize=False)
@@ -150,6 +197,7 @@ class ContrastiveExperiment(pl.LightningModule):
                 use_pos_weighting=self._use_pos_weighting(),
                 denom_pos_weight=self.denom_pos_weight,
                 sinkhorn=self.sinkhorn, sinkhorn_iters=self.sinkhorn_iters,
+                pos_weight_sim=self._ema_pos_weight_sim(images),
                 test_labels=loss_test_labels)
         elif self.supcon_softpos:
             embeddings = self.model(images)
@@ -158,6 +206,7 @@ class ContrastiveExperiment(pl.LightningModule):
                 embeddings, labels, temperature=self.temperature,
                 pos_weight_tau=supcon_tau,
                 use_pos_weighting=self._use_pos_weighting(),
+                pos_weight_sim=self._ema_pos_weight_sim(images),
                 test_labels=loss_test_labels)
         else:
             embeddings = self.model(images)
@@ -184,6 +233,12 @@ class ContrastiveExperiment(pl.LightningModule):
             if key in loss_dict:
                 self.log(f"train_{key}", loss_dict[key], on_step=True, on_epoch=True)
         return loss_dict["loss"]
+
+    def on_train_batch_end(self, outputs: Any, batch: Any, batch_idx: int) -> None:
+        # Update the EMA teacher after the optimizer step has updated the model.
+        if self.ema_model is not None:
+            self._update_ema()
+
 
     def on_validation_epoch_start(self) -> None:
         self._val_embeddings = []

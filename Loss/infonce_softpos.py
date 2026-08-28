@@ -30,6 +30,7 @@ def infonce_softpos_loss(embeddings: Tensor, labels: Tensor,
                          denom_pos_weight: bool = False,
                          sinkhorn: bool = False,
                          sinkhorn_iters: int = 5,
+                         pos_weight_sim: Tensor = None,
                          test_labels: Tensor = None,
                          **kwargs) -> Dict[str, Tensor]:
     """Supervised InfoNCE / SupCon with soft (similarity-weighted) positives.
@@ -68,7 +69,10 @@ def infonce_softpos_loss(embeddings: Tensor, labels: Tensor,
     logits = logits - logits.max(dim=1, keepdim=True).values.detach()
 
     # Soft positive weights from cosine similarity (same scheme as DCLSoftPos).
-    raw_cos = embeddings @ embeddings.t()
+    # When ``pos_weight_sim`` is supplied (e.g. cosine similarities from an EMA
+    # "teacher" copy of the model), it drives the positive weights instead of
+    # the online embeddings' own similarities.
+    raw_cos = embeddings @ embeddings.t() if pos_weight_sim is None else pos_weight_sim
     if not use_pos_weighting:
         pos_weights = pos_mask / pos_per_anchor.clamp(min=1).unsqueeze(1)
     else:

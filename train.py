@@ -366,6 +366,15 @@ def parse_args() -> argparse.Namespace:
                              "Only used with --dcl_soft_pos_loss.")
     parser.add_argument("--sinkhorn_iters", type=int, default=5,
                         help="Number of Sinkhorn-Knopp iterations. Default: 5")
+    parser.add_argument("--EMA_pos_weight", action="store_true",
+                        help="Compute the soft-positive weights from an EMA "
+                             "(momentum-updated) teacher copy of the model instead "
+                             "of the online embeddings. Used with --supcon_soft_pos_loss, "
+                             "--infonce_softpos or --dcl_soft_pos_loss.")
+    parser.add_argument("--EMA_momentum", type=float, default=0.999,
+                        help="Momentum for the EMA teacher weight update when "
+                             "--EMA_pos_weight is set (ema = m*ema + (1-m)*online). "
+                             "Default: 0.999")
 
     # LeJEPA self-supervised training (only used when --model dino_lora)
     parser.add_argument("--ssl_lejepa", action="store_true",
@@ -634,6 +643,8 @@ def main() -> None:
                 sinkhorn_iters=args.sinkhorn_iters,
                 sigreg_weight=args.sigreg_weight,
                 sigreg_slices=args.sigreg_slices,
+                EMA_pos_weight=args.EMA_pos_weight,
+                EMA_momentum=args.EMA_momentum,
                 train_cat=args.train_cat,
                 test_cats=args.test_cat,
             )
@@ -725,7 +736,8 @@ def main() -> None:
             else:
                 susp_tag = ""
             dcl_tag = f"_DCL{dcl_variant}-SIGReg{args.sigreg_weight}{susp_tag}" if args.dcl_sigreg_loss else ""
-            softpos_tag = f"_DCLSoftPos-Tau{args.dcl_soft_pos_tau}{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}" if args.dcl_soft_pos_loss else ""
+            ema_pw_tag = f"-EMA{args.EMA_momentum}" if args.EMA_pos_weight else ""
+            softpos_tag = f"_DCLSoftPos-Tau{args.dcl_soft_pos_tau}{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}{ema_pw_tag}" if args.dcl_soft_pos_loss else ""
             vanilla_dcl_tag = "_VanillaDCL" if args.vanilla_dcl else ""
             vanilla_supcon_tag = "_VanillaSupCon" if args.vanilla_supcon else ""
             infonce_softpos_tag = (
@@ -733,12 +745,14 @@ def main() -> None:
                 f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
                 f"{'-DenomPosW' if args.denominator_pos_weight else ''}"
                 f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
+                f"{ema_pw_tag}"
             ) if args.infonce_softpos else ""
             supcon_softpos_tag = (
                 f"_SupConSoftPos-{'LinearTau' + str(args.supcon_tau_start) + 'to' + str(args.supcon_tau_end) if args.tau_annealing else 'Tau' + str(args.supcon_soft_pos_tau)}"
                 f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
                 f"{'-DenomPosW' if args.denominator_pos_weight else ''}"
                 f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
+                f"{ema_pw_tag}"
             ) if args.supcon_soft_pos_loss else ""
             ckpt_suffix = (
                 f"{model_prefix}"
