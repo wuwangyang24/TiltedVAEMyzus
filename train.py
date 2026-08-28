@@ -244,6 +244,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use_proj_head", action="store_true",
                         help="Use the projection head on top of the backbone features. "
                              "If not set, the backbone features are directly L2-normalized.")
+    parser.add_argument("--grad_checkpointing", action="store_true",
+                        help="Enable gradient (activation) checkpointing on the backbone "
+                             "to trade extra compute for lower memory (allows larger "
+                             "batches). Only used with --model backbone or dino_lora.")
 
     # Contrastive dataset (synthesis-program labels; only used when --model dino_lora)
     parser.add_argument("--contrastive_metadata", type=str, nargs="+", default=None,
@@ -558,6 +562,7 @@ def main() -> None:
                 supcon_denom_pos_weight=args.denominator_pos_weight,
                 sinkhorn=args.sinkhorn,
                 sinkhorn_iters=args.sinkhorn_iters,
+                grad_checkpointing=args.grad_checkpointing,
             )
         else:
             model = DinoV2LoRA(
@@ -583,6 +588,7 @@ def main() -> None:
                 supcon_denom_pos_weight=args.denominator_pos_weight,
                 sinkhorn=args.sinkhorn,
                 sinkhorn_iters=args.sinkhorn_iters,
+                grad_checkpointing=args.grad_checkpointing,
             )
 
         if args.ssl_lejepa:
