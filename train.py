@@ -348,6 +348,11 @@ def parse_args() -> argparse.Namespace:
                         help="Use the plain Supervised Contrastive (SupCon) loss (no "
                              "SIGReg, no soft positives): supervised single-view "
                              "SupCon with the coupled InfoNCE denominator.")
+    parser.add_argument("--cross_entropy", action="store_true",
+                        help="Supervised cross-entropy baseline: train a linear "
+                             "classifier on the (normalized) embedding over the "
+                             "train-label classes. Discarded at eval; kNN / "
+                             "linear-probe still run on the embeddings.")
     parser.add_argument("--infonce_softpos", action="store_true",
                         help="Use InfoNCE/SupCon with similarity-weighted positives "
                              "(same soft-positive scheme as --dcl_soft_pos_loss, but "
@@ -551,6 +556,15 @@ def main() -> None:
                 seed=args.seed,
             )
 
+        # The cross-entropy baseline needs the number of training-label classes
+        # up front to size its linear classifier head. setup() is idempotent;
+        # Lightning calls it again internally during fit().
+        num_classes = None
+        if args.cross_entropy:
+            datamodule.setup()
+            num_classes = (datamodule.num_train_classes if args.dataset == "inat"
+                           else datamodule.num_classes)
+
         if is_backbone:
             model = Backbone(
                 backbone=args.backbone,
@@ -572,6 +586,8 @@ def main() -> None:
                 sinkhorn=args.sinkhorn,
                 sinkhorn_iters=args.sinkhorn_iters,
                 grad_checkpointing=args.grad_checkpointing,
+                num_classes=num_classes,
+                cross_entropy=args.cross_entropy,
             )
         else:
             model = DinoV2LoRA(
@@ -598,6 +614,8 @@ def main() -> None:
                 sinkhorn=args.sinkhorn,
                 sinkhorn_iters=args.sinkhorn_iters,
                 grad_checkpointing=args.grad_checkpointing,
+                num_classes=num_classes,
+                cross_entropy=args.cross_entropy,
             )
 
         if args.ssl_lejepa:
@@ -632,6 +650,7 @@ def main() -> None:
                 vanilla_supcon=args.vanilla_supcon,
                 infonce_softpos=args.infonce_softpos,
                 supcon_softpos=args.supcon_soft_pos_loss,
+                cross_entropy=args.cross_entropy,
                 supcon_soft_pos_tau=args.supcon_soft_pos_tau,
                 denom_pos_weight=args.denominator_pos_weight,
                 tau_annealing=args.tau_annealing,
@@ -740,6 +759,7 @@ def main() -> None:
             softpos_tag = f"_DCLSoftPos-Tau{args.dcl_soft_pos_tau}{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}{ema_pw_tag}" if args.dcl_soft_pos_loss else ""
             vanilla_dcl_tag = "_VanillaDCL" if args.vanilla_dcl else ""
             vanilla_supcon_tag = "_VanillaSupCon" if args.vanilla_supcon else ""
+            cross_entropy_tag = "_CrossEntropy" if args.cross_entropy else ""
             infonce_softpos_tag = (
                 f"_InfoNCESoftPos-Tau{args.pos_weight_tau}"
                 f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
@@ -765,6 +785,7 @@ def main() -> None:
                 f"{softpos_tag}"
                 f"{vanilla_dcl_tag}"
                 f"{vanilla_supcon_tag}"
+                f"{cross_entropy_tag}"
                 f"{infonce_softpos_tag}"
                 f"{supcon_softpos_tag}"
                 f"{dataset_tag}"

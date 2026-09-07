@@ -74,6 +74,8 @@ class Backbone(nn.Module):
                  sinkhorn: bool = False,
                  sinkhorn_iters: int = 5,
                  grad_checkpointing: bool = False,
+                 num_classes: Optional[int] = None,
+                 cross_entropy: bool = False,
                  pretrained: bool = True) -> None:
         super().__init__()
 
@@ -118,6 +120,16 @@ class Backbone(nn.Module):
             )
         else:
             self.projection = None
+
+        # Optional linear classifier for the supervised cross-entropy baseline.
+        # It sits on the same (normalized) embedding the contrastive losses use.
+        if cross_entropy:
+            if not num_classes or num_classes < 2:
+                raise ValueError("cross_entropy requires num_classes >= 2.")
+            clf_in = embedding_dim if self.use_proj_head else feat_dim
+            self.classifier = nn.Linear(clf_in, num_classes)
+        else:
+            self.classifier = None
 
         # Stateful DCL+SIGReg loss with its EMA class-mean memory bank.
         self.dcl_sigreg_loss = DCLSIGRegLoss(
@@ -204,6 +216,24 @@ class Backbone(nn.Module):
     ) -> Dict[str, Tensor]:
         kwargs.setdefault("temperature", self.temperature)
         return infonce_softpos_loss(embeddings, labels, **kwargs)
+
+    def ce_loss_function(
+        self, embeddings: Tensor, labels: Tensor, **kwargs,
+    ) -> Dict[str, Tensor]:
+        if self.classifier is None:
+            raise RuntimeError(
+                "ce_loss_function requires the model to be built with "
+                "cross_entropy=True."
+            )
+        labels = labels.view(-1).long()
+        logits = self.classifier(embeddings)
+        loss = F.cross_entropy(logits, labels)
+        with torch.no_grad():
+            top1 = (logits.argmax(dim=1) == labels).float().mean()
+            k = min(5, logits.size(1))
+            top5 = (logits.topk(k, dim=1).indices
+                    == labels.unsqueeze(1)).any(dim=1).float().mean()
+        return {"loss": loss, "ce_top1": top1, "ce_top5": top5}
 
     @staticmethod
     @torch.no_grad()

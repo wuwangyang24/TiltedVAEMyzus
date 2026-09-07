@@ -41,6 +41,7 @@ class ContrastiveExperiment(pl.LightningModule):
                  infonce_softpos: bool = False,
                  supcon_softpos: bool = False,
                  vanilla_supcon: bool = False,
+                 cross_entropy: bool = False,
                  pos_weight_tau: float = 0.1,
                  supcon_soft_pos_tau: float = 0.1,
                  denom_pos_weight: bool = False,
@@ -72,6 +73,7 @@ class ContrastiveExperiment(pl.LightningModule):
         self.infonce_softpos = infonce_softpos
         self.supcon_softpos = supcon_softpos
         self.vanilla_supcon = vanilla_supcon
+        self.cross_entropy = cross_entropy
         self.pos_weight_tau = pos_weight_tau
         self.supcon_soft_pos_tau = supcon_soft_pos_tau
         self.denom_pos_weight = denom_pos_weight
@@ -208,6 +210,11 @@ class ContrastiveExperiment(pl.LightningModule):
                 use_pos_weighting=self._use_pos_weighting(),
                 pos_weight_sim=self._ema_pos_weight_sim(images),
                 test_labels=loss_test_labels)
+        elif self.cross_entropy:
+            # Supervised cross-entropy baseline: a linear classifier on the same
+            # normalized embedding the contrastive losses operate on.
+            embeddings = self.model(images)
+            loss_dict = self.model.ce_loss_function(embeddings, labels)
         else:
             embeddings = self.model(images)
             loss_dict = self.model.loss_function(
@@ -229,7 +236,7 @@ class ContrastiveExperiment(pl.LightningModule):
         )
         for key in ("suspicion_mean", "suspicion_same_testcat", "suspicion_diff_testcat",
                     "pos_weight_same_testcat", "pos_weight_diff_testcat",
-                    "pos_weight_testcat_ratio"):
+                    "pos_weight_testcat_ratio", "ce_top1", "ce_top5"):
             if key in loss_dict:
                 self.log(f"train_{key}", loss_dict[key], on_step=True, on_epoch=True)
         return loss_dict["loss"]
@@ -252,7 +259,7 @@ class ContrastiveExperiment(pl.LightningModule):
             on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
         )
         for key in ("pos_weight_same_testcat", "pos_weight_diff_testcat",
-                    "pos_weight_testcat_ratio"):
+                    "pos_weight_testcat_ratio", "ce_top1", "ce_top5"):
             if key in loss_dict:
                 self.log(f"val_{key}", loss_dict[key], on_step=False, on_epoch=True,
                          sync_dist=True)
