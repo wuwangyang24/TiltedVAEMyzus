@@ -41,6 +41,11 @@ class ContrastiveExperiment(pl.LightningModule):
                  infonce_softpos: bool = False,
                  supcon_softpos: bool = False,
                  vanilla_supcon: bool = False,
+                 ms_loss: bool = False,
+                 ms_thresh: float = 0.5,
+                 ms_margin: float = 0.1,
+                 ms_scale_pos: float = 2.0,
+                 ms_scale_neg: float = 40.0,
                  cross_entropy: bool = False,
                  pos_weight_tau: float = 0.1,
                  supcon_soft_pos_tau: float = 0.1,
@@ -73,6 +78,11 @@ class ContrastiveExperiment(pl.LightningModule):
         self.infonce_softpos = infonce_softpos
         self.supcon_softpos = supcon_softpos
         self.vanilla_supcon = vanilla_supcon
+        self.ms_loss = ms_loss
+        self.ms_thresh = ms_thresh
+        self.ms_margin = ms_margin
+        self.ms_scale_pos = ms_scale_pos
+        self.ms_scale_neg = ms_scale_neg
         self.cross_entropy = cross_entropy
         self.pos_weight_tau = pos_weight_tau
         self.supcon_soft_pos_tau = supcon_soft_pos_tau
@@ -191,6 +201,12 @@ class ContrastiveExperiment(pl.LightningModule):
             embeddings = self.model(images)
             loss_dict = self.model.vanilla_supcon_loss_function(
                 embeddings, labels, temperature=self.temperature)
+        elif self.ms_loss:
+            embeddings = self.model(images)
+            loss_dict = self.model.ms_loss_function(
+                embeddings, labels, thresh=self.ms_thresh,
+                margin=self.ms_margin, scale_pos=self.ms_scale_pos,
+                scale_neg=self.ms_scale_neg)
         elif self.infonce_softpos:
             embeddings = self.model(images)
             loss_dict = self.model.infonce_softpos_loss_function(

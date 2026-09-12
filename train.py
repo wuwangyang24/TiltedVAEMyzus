@@ -348,6 +348,17 @@ def parse_args() -> argparse.Namespace:
                         help="Use the plain Supervised Contrastive (SupCon) loss (no "
                              "SIGReg, no soft positives): supervised single-view "
                              "SupCon with the coupled InfoNCE denominator.")
+    parser.add_argument("--ms_loss", action="store_true",
+                        help="Use the Multi-Similarity loss (Wang et al., CVPR 2019) "
+                             "with pair mining, as in the official MS-Loss repo.")
+    parser.add_argument("--ms_thresh", type=float, default=0.5,
+                        help="Multi-Similarity similarity offset (lambda). Default: 0.5")
+    parser.add_argument("--ms_margin", type=float, default=0.1,
+                        help="Multi-Similarity pair-mining margin (epsilon). Default: 0.1")
+    parser.add_argument("--ms_scale_pos", type=float, default=2.0,
+                        help="Multi-Similarity positive scale (alpha). Default: 2.0")
+    parser.add_argument("--ms_scale_neg", type=float, default=40.0,
+                        help="Multi-Similarity negative scale (beta). Default: 40.0")
     parser.add_argument("--cross_entropy", action="store_true",
                         help="Supervised cross-entropy baseline: train a linear "
                              "classifier on the (normalized) embedding over the "
@@ -648,6 +659,11 @@ def main() -> None:
                 dcl_soft_pos_loss=args.dcl_soft_pos_loss,
                 vanilla_dcl=args.vanilla_dcl,
                 vanilla_supcon=args.vanilla_supcon,
+                ms_loss=args.ms_loss,
+                ms_thresh=args.ms_thresh,
+                ms_margin=args.ms_margin,
+                ms_scale_pos=args.ms_scale_pos,
+                ms_scale_neg=args.ms_scale_neg,
                 infonce_softpos=args.infonce_softpos,
                 supcon_softpos=args.supcon_soft_pos_loss,
                 cross_entropy=args.cross_entropy,
@@ -759,6 +775,10 @@ def main() -> None:
             softpos_tag = f"_DCLSoftPos-Tau{args.dcl_soft_pos_tau}{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}{ema_pw_tag}" if args.dcl_soft_pos_loss else ""
             vanilla_dcl_tag = "_VanillaDCL" if args.vanilla_dcl else ""
             vanilla_supcon_tag = "_VanillaSupCon" if args.vanilla_supcon else ""
+            ms_loss_tag = (
+                f"_MS-L{args.ms_thresh}-M{args.ms_margin}"
+                f"-A{args.ms_scale_pos}-B{args.ms_scale_neg}"
+            ) if args.ms_loss else ""
             cross_entropy_tag = "_CrossEntropy" if args.cross_entropy else ""
             infonce_softpos_tag = (
                 f"_InfoNCESoftPos-Tau{args.pos_weight_tau}"
@@ -785,6 +805,7 @@ def main() -> None:
                 f"{softpos_tag}"
                 f"{vanilla_dcl_tag}"
                 f"{vanilla_supcon_tag}"
+                f"{ms_loss_tag}"
                 f"{cross_entropy_tag}"
                 f"{infonce_softpos_tag}"
                 f"{supcon_softpos_tag}"
