@@ -9,11 +9,12 @@ test images once with the *frozen* backbone and reports six metrics:
   * LinProbe: linear-probe top-1 accuracy (LBFGS logistic regression on the
              frozen embeddings, train/test split of the encoded set).
   * Spearman / Pearson : rank / linear correlation between the pairwise
-             embedding distances (``test_cat`` centroids) and the taxonomic
-             cophenetic distances (Mantel-style comparison of two distance
-             matrices).
+             embedding distances (species centroids) and the taxonomic
+             cophenetic distances, computed once per superclass over the full
+             taxonomy (Mantel-style comparison of two distance matrices).
   * Dendrogram: Spearman correlation between the cophenetic distances of an
-             agglomerative dendrogram built on the embeddings and the taxonomy.
+             agglomerative dendrogram built on the embeddings and the taxonomy
+             (also once per superclass).
 
 The results are printed and (optionally) written as one LaTeX table per metric,
 laid out like the paper template: rows grouped by ``test_cat`` (multirow),
@@ -102,11 +103,15 @@ SUPPORTED_BACKBONES = (
 RANKS = ["kingdom", "phylum", "class", "order", "family", "genus",
          "specific_epithet"]
 
-# Metric key -> (table label, human caption fragment). Order defines the tables.
-METRICS: List[Tuple[str, str, str]] = [
+# Per-``test_cat`` accuracy metrics -> (table label, caption fragment).
+ACC_METRICS: List[Tuple[str, str, str]] = [
     ("knn1", "kNN-1", "1-nearest-neighbour top-1 accuracy"),
     ("knn5", "kNN-5", "5-nearest-neighbour top-1 accuracy"),
     ("linprobe", "LinProbe", "linear-probe top-1 accuracy"),
+]
+
+# Per-superclass correlation metrics (computed once over the full taxonomy).
+CORR_METRICS: List[Tuple[str, str, str]] = [
     ("spearman", "Spearman", "Spearman correlation between embedding and taxonomic distances"),
     ("pearson", "Pearson", "Pearson correlation between embedding and taxonomic distances"),
     ("dendrogram", "Dendro", "dendrogram cophenetic correlation with the taxonomy"),
@@ -419,6 +424,53 @@ def build_latex_table(
     return "\n".join(lines)
 
 
+def build_latex_table_flat(
+    metric_key: str, caption_fragment: str, results: dict,
+    methods: List[str], superclasses: List[str], scale: float, decimals: int,
+) -> str:
+    """One row per method, one column per superclass (no test_cat grouping)."""
+    col_spec = "l" + "c" * len(superclasses)
+    lines = [
+        r"\begin{table*}[ht]\centering\small",
+        r"\resizebox{\textwidth}{!}{%",
+        rf"\begin{{tabular}}{{{col_spec}}}",
+        r"\toprule",
+        "Method & " + " & ".join(superclasses) + r" \\",
+        r"\midrule",
+    ]
+
+    best_per_col: List[Optional[float]] = []
+    for sc in superclasses:
+        vals = [results[metric_key][m].get(sc) for m in methods]
+        vals = [v for v in vals if v is not None and not
+                (isinstance(v, float) and np.isnan(v))]
+        best_per_col.append(max(vals) if vals else None)
+
+    for method in methods:
+        cells = []
+        for ci, sc in enumerate(superclasses):
+            v = results[metric_key][method].get(sc)
+            is_best = (best_per_col[ci] is not None and v is not None
+                       and not (isinstance(v, float) and np.isnan(v))
+                       and abs(v - best_per_col[ci]) < 1e-12)
+            cells.append(format_value(v, is_best, scale, decimals))
+        method_cell = method.replace("_", r"\_")
+        lines.append(f"{method_cell:<14} & " + " & ".join(cells) + r" \\")
+
+    lines.extend([
+        r"\bottomrule",
+        r"\end{tabular}%",
+        r"}",
+        rf"\caption{{{caption_fragment}, computed per superclass over the full "
+        rf"taxonomy. Values are multiplied by {int(scale)} and rounded to "
+        rf"{decimals} decimals. Bold indicates the largest value across methods "
+        r"per taxonomic group.}",
+        rf"\label{{tab:inat_{metric_key}}}",
+        r"\end{table*}",
+    ])
+    return "\n".join(lines)
+
+
 # ── CLI / main ───────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
@@ -461,11 +513,13 @@ def main() -> None:
         if tc["rank"] not in RANKS:
             raise SystemExit(f"test_cat rank '{tc['rank']}' not in {RANKS}")
 
-    # results[metric][test_cat_label][method][superclass] = value
-    results: dict = {
+    # results_acc[metric][test_cat_label][method][superclass] = value
+    results_acc: dict = {
         mk: {tc["label"]: {m: {} for m in methods} for tc in test_cats}
-        for mk, _, _ in METRICS
+        for mk, _, _ in ACC_METRICS
     }
+    # results_corr[metric][method][superclass] = value  (one per superclass)
+    results_corr: dict = {mk: {m: {} for m in methods} for mk, _, _ in CORR_METRICS}
 
     for backbone_cfg in backbones:
         name = backbone_cfg["name"]
@@ -493,28 +547,31 @@ def main() -> None:
             embeddings = encode_paths(model, paths, transform, args.batch_size,
                                       device, args.num_workers)
 
+            # Correlation metrics: once per superclass over the full taxonomy
+            # (species-level centroids), independent of test_cat.
+            corr = correlation_metrics(embeddings, taxa, len(RANKS) - 1,
+                                       args.metric, args.linkage)
+            for mk in ("spearman", "pearson", "dendrogram"):
+                results_corr[mk][name][sc] = corr[mk]
+
             for tc in test_cats:
                 rank_idx = RANKS.index(tc["rank"])
                 labels = labels_at_rank(taxa, rank_idx)
 
                 knn = knn_accuracy(embeddings, labels, ks=(1, 5))
-                results["knn1"][tc["label"]][name][sc] = knn[1]
-                results["knn5"][tc["label"]][name][sc] = knn[5]
+                results_acc["knn1"][tc["label"]][name][sc] = knn[1]
+                results_acc["knn5"][tc["label"]][name][sc] = knn[5]
 
-                results["linprobe"][tc["label"]][name][sc] = linear_probe_top1(
+                results_acc["linprobe"][tc["label"]][name][sc] = linear_probe_top1(
                     embeddings, labels, device, args.train_fraction, args.seed,
                     lr=args.probe_lr, epochs=args.probe_epochs)
 
-                corr = correlation_metrics(embeddings, taxa, rank_idx,
-                                           args.metric, args.linkage)
-                results["spearman"][tc["label"]][name][sc] = corr["spearman"]
-                results["pearson"][tc["label"]][name][sc] = corr["pearson"]
-                results["dendrogram"][tc["label"]][name][sc] = corr["dendrogram"]
-
                 print(f"    {tc['label']} ({tc['rank']}): "
                       f"kNN1={knn[1]:.3f} kNN5={knn[5]:.3f} "
-                      f"LinProbe={results['linprobe'][tc['label']][name][sc]:.3f} "
-                      f"Spearman={corr['spearman']:.3f}")
+                      f"LinProbe={results_acc['linprobe'][tc['label']][name][sc]:.3f}")
+
+            print(f"    corr (full taxonomy): Spearman={corr['spearman']:.3f} "
+                  f"Pearson={corr['pearson']:.3f} Dendro={corr['dendrogram']:.3f}")
 
         del model
         if device.type == "cuda":
@@ -522,15 +579,20 @@ def main() -> None:
 
     # ── Emit LaTeX tables ─────────────────────────────────────────────────────
     tables: Dict[str, str] = {}
-    for metric_key, table_label, caption in METRICS:
-        table = build_latex_table(
-            metric_key, table_label, caption, results, test_cats, methods,
+    for metric_key, table_label, caption in ACC_METRICS:
+        tables[metric_key] = build_latex_table(
+            metric_key, table_label, caption, results_acc, test_cats, methods,
             superclasses, scale=100.0, decimals=2)
-        tables[metric_key] = table
+    for metric_key, table_label, caption in CORR_METRICS:
+        tables[metric_key] = build_latex_table_flat(
+            metric_key, caption, results_corr, methods,
+            superclasses, scale=100.0, decimals=2)
+
+    for metric_key, table_label, _ in ACC_METRICS + CORR_METRICS:
         print("\n" + "#" * 74)
         print(f"# {table_label} table")
         print("#" * 74)
-        print(table)
+        print(tables[metric_key])
 
     if args.output_dir:
         os.makedirs(args.output_dir, exist_ok=True)
@@ -538,7 +600,8 @@ def main() -> None:
             with open(os.path.join(args.output_dir, f"{metric_key}.tex"), "w") as f:
                 f.write(table + "\n")
         with open(os.path.join(args.output_dir, "results.json"), "w") as f:
-            json.dump(results, f, indent=2)
+            json.dump({"accuracy": results_acc, "correlation": results_corr},
+                      f, indent=2)
         print(f"\nWrote {len(tables)} tables + results.json to {args.output_dir}")
 
 
