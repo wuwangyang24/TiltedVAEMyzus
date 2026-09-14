@@ -8,13 +8,13 @@ test images once with the *frozen* backbone and reports six metrics:
   * kNN-5  : top-1 hit within the 5 nearest neighbours.
   * LinProbe: linear-probe top-1 accuracy (LBFGS logistic regression on the
              frozen embeddings, train/test split of the encoded set).
-  * Spearman / Pearson : rank / linear correlation between the pairwise
-             embedding distances (species centroids) and the taxonomic
-             cophenetic distances, computed once per superclass over the full
-             taxonomy (Mantel-style comparison of two distance matrices).
-  * Dendrogram: Spearman correlation between the cophenetic distances of an
-             agglomerative dendrogram built on the embeddings and the taxonomy
-             (also once per superclass).
+  * Spearman / Pearson / CPCC / Dendrogram : Mantel-style comparison of the
+             pairwise embedding distances against the taxonomic cophenetic
+             distances, computed once per superclass. This mirrors the
+             validation-epoch metric in ``contrastive_experiment``: sample-level
+             (no centroids), capped at 2048 randomly drawn images (seed 42),
+             cosine distances, average linkage, and a hierarchy built only from
+             the ``test_cats`` ranks.
 
 The results are printed and (optionally) written as one LaTeX table per metric,
 laid out like the paper template: rows grouped by ``test_cat`` (multirow),
@@ -110,12 +110,17 @@ ACC_METRICS: List[Tuple[str, str, str]] = [
     ("linprobe", "LinProbe", "linear-probe top-1 accuracy"),
 ]
 
-# Per-superclass correlation metrics (computed once over the full taxonomy).
+# Per-superclass correlation metrics (computed once over the test_cat ranks).
 CORR_METRICS: List[Tuple[str, str, str]] = [
     ("spearman", "Spearman", "Spearman correlation between embedding and taxonomic distances"),
     ("pearson", "Pearson", "Pearson correlation between embedding and taxonomic distances"),
+    ("cpcc", "CPCC", "cophenetic correlation coefficient of the embedding dendrogram"),
     ("dendrogram", "Dendro", "dendrogram cophenetic correlation with the taxonomy"),
 ]
+
+# Defaults hard-coded in ``contrastive_experiment._cophenetic_correlation``.
+COPH_MAX_SAMPLES = 2048
+COPH_SEED = 42
 
 
 # ── Dataset ──────────────────────────────────────────────────────────────────
@@ -261,6 +266,26 @@ def taxonomic_cophenetic_matrix(tax_tuples: List[Tuple[str, ...]]) -> np.ndarray
     return coph
 
 
+def select_subset(
+    paths: List[str], taxa: List[Tuple[str, ...]],
+    max_species: Optional[int], max_samples: Optional[int], seed: int,
+) -> Tuple[List[str], List[Tuple[str, ...]]]:
+    """Cap species then images, matching ``cophenetic_correlation_test.select_samples``."""
+    rng = np.random.RandomState(seed)
+
+    all_taxa = sorted(set(taxa))
+    keep_taxa = set(all_taxa)
+    if max_species is not None and max_species < len(all_taxa):
+        idx = rng.choice(len(all_taxa), size=max_species, replace=False)
+        keep_taxa = {all_taxa[i] for i in idx}
+
+    filtered = [(p, t) for p, t in zip(paths, taxa) if t in keep_taxa]
+    rng.shuffle(filtered)
+    if max_samples is not None and max_samples < len(filtered):
+        filtered = filtered[:max_samples]
+    return [p for p, _ in filtered], [t for _, t in filtered]
+
+
 def labels_at_rank(taxa: List[Tuple[str, ...]], rank_idx: int) -> torch.Tensor:
     """Integer labels using the cumulative path up to ``rank_idx`` as the class."""
     class_ids: Dict[Tuple[str, ...], int] = {}
@@ -332,36 +357,41 @@ def linear_probe_top1(
 
 
 def correlation_metrics(
-    embeddings: torch.Tensor, taxa: List[Tuple[str, ...]], rank_idx: int,
+    embeddings: torch.Tensor, taxa: List[Tuple[str, ...]], rank_indices: List[int],
     metric: str = "cosine", linkage_method: str = "average",
+    max_samples: int = COPH_MAX_SAMPLES, seed: int = COPH_SEED,
 ) -> Dict[str, float]:
-    """Aggregate to rank centroids and correlate with the taxonomy."""
-    class_ids: Dict[Tuple[str, ...], int] = {}
-    for t in taxa:
-        class_ids.setdefault(t[:rank_idx + 1], len(class_ids))
-    if len(class_ids) < 3:
-        return {"spearman": float("nan"), "pearson": float("nan"),
-                "dendrogram": float("nan")}
+    """Sample-level cophenetic correlation, mirroring the validation-epoch metric.
 
-    sums = torch.zeros(len(class_ids), embeddings.size(1))
-    counts = torch.zeros(len(class_ids))
-    for emb, t in zip(embeddings, taxa):
-        cid = class_ids[t[:rank_idx + 1]]
-        sums[cid] += emb
-        counts[cid] += 1
-    centroids = (sums / counts.unsqueeze(1)).numpy()
-    tax_tuples = [key for key, _ in sorted(class_ids.items(), key=lambda kv: kv[1])]
+    ``rank_indices`` selects the ``test_cat`` ranks (coarse -> fine), matching the
+    columns of ``val_test_labels`` in ``contrastive_experiment``.
+    """
+    nan_result = {"spearman": float("nan"), "pearson": float("nan"),
+                  "cpcc": float("nan"), "dendrogram": float("nan")}
+    n, num_levels = len(taxa), len(rank_indices)
+    if n < 3 or num_levels < 2:
+        return nan_result
+
+    tax_tuples = [tuple(t[r] for r in rank_indices) for t in taxa]
+    X = embeddings.detach().cpu().float().numpy()
+    if n > max_samples:
+        rng = np.random.RandomState(seed)
+        idx = rng.choice(n, size=max_samples, replace=False)
+        X = X[idx]
+        tax_tuples = [tax_tuples[i] for i in idx]
 
     tax_condensed = squareform(taxonomic_cophenetic_matrix(tax_tuples), checks=False)
-    emb_condensed = pdist(centroids, metric=metric)
+    emb_condensed = pdist(X, metric=metric)
+    if not np.isfinite(emb_condensed).all() or emb_condensed.std() == 0:
+        return nan_result
 
     spearman_r, _ = spearmanr(emb_condensed, tax_condensed)
     pearson_r, _ = pearsonr(emb_condensed, tax_condensed)
     Z = linkage(emb_condensed, method=linkage_method)
-    _, coph_dists = cophenet(Z, emb_condensed)
+    cpcc, coph_dists = cophenet(Z, emb_condensed)
     dendro_r, _ = spearmanr(coph_dists, tax_condensed)
     return {"spearman": float(spearman_r), "pearson": float(pearson_r),
-            "dendrogram": float(dendro_r)}
+            "cpcc": float(cpcc), "dendrogram": float(dendro_r)}
 
 
 # ── LaTeX table ──────────────────────────────────────────────────────────────
@@ -461,8 +491,9 @@ def build_latex_table_flat(
         r"\bottomrule",
         r"\end{tabular}%",
         r"}",
-        rf"\caption{{{caption_fragment}, computed per superclass over the full "
-        rf"taxonomy. Values are multiplied by {int(scale)} and rounded to "
+        rf"\caption{{{caption_fragment}, computed per superclass over the "
+        rf"{{\ttfamily test\_cats}} ranks at the sample level. Values are "
+        rf"multiplied by {int(scale)} and rounded to "
         rf"{decimals} decimals. Bold indicates the largest value across methods "
         r"per taxonomic group.}",
         rf"\label{{tab:inat_{metric_key}}}",
@@ -486,6 +517,12 @@ def parse_args() -> argparse.Namespace:
                    help="Pairwise embedding distance for the correlation metrics")
     p.add_argument("--linkage", default="average",
                    choices=["average", "complete", "single", "ward"])
+    p.add_argument("--coph_max_samples", type=int, default=COPH_MAX_SAMPLES,
+                   help="Images subsampled for the correlation metrics")
+    p.add_argument("--coph_seed", type=int, default=COPH_SEED,
+                   help="Seed for the correlation-metric subsample")
+    p.add_argument("--max_species", type=int, default=None,
+                   help="Optional cap on distinct species per superclass (random subset)")
     p.add_argument("--max_samples", type=int, default=None,
                    help="Optional cap on images per (backbone, superclass)")
     p.add_argument("--probe_lr", type=float, default=0.1)
@@ -513,6 +550,9 @@ def main() -> None:
         if tc["rank"] not in RANKS:
             raise SystemExit(f"test_cat rank '{tc['rank']}' not in {RANKS}")
 
+    # Correlation ranks = the test_cat columns of ``val_test_labels``, coarse -> fine.
+    corr_rank_indices = sorted(RANKS.index(tc["rank"]) for tc in test_cats)
+
     # results_acc[metric][test_cat_label][method][superclass] = value
     results_acc: dict = {
         mk: {tc["label"]: {m: {} for m in methods} for tc in test_cats}
@@ -537,21 +577,21 @@ def main() -> None:
             if not paths:
                 print(f"  [{sc}] no images, skipping")
                 continue
-            if args.max_samples and len(paths) > args.max_samples:
-                rng = np.random.RandomState(args.seed)
-                keep = rng.choice(len(paths), size=args.max_samples, replace=False)
-                paths = [paths[i] for i in keep]
-                taxa = [taxa[i] for i in keep]
+            paths, taxa = select_subset(paths, taxa, args.max_species,
+                                        args.max_samples, args.seed)
+            if not paths:
+                print(f"  [{sc}] no images after subsampling, skipping")
+                continue
 
-            print(f"  [{sc}] encoding {len(paths)} images...")
+            print(f"  [{sc}] encoding {len(paths)} images over "
+                  f"{len(set(taxa))} species...")
             embeddings = encode_paths(model, paths, transform, args.batch_size,
                                       device, args.num_workers)
 
-            # Correlation metrics: once per superclass over the full taxonomy
-            # (species-level centroids), independent of test_cat.
-            corr = correlation_metrics(embeddings, taxa, len(RANKS) - 1,
-                                       args.metric, args.linkage)
-            for mk in ("spearman", "pearson", "dendrogram"):
+            corr = correlation_metrics(embeddings, taxa, corr_rank_indices,
+                                       args.metric, args.linkage,
+                                       args.coph_max_samples, args.coph_seed)
+            for mk, _, _ in CORR_METRICS:
                 results_corr[mk][name][sc] = corr[mk]
 
             for tc in test_cats:
@@ -570,8 +610,9 @@ def main() -> None:
                       f"kNN1={knn[1]:.3f} kNN5={knn[5]:.3f} "
                       f"LinProbe={results_acc['linprobe'][tc['label']][name][sc]:.3f}")
 
-            print(f"    corr (full taxonomy): Spearman={corr['spearman']:.3f} "
-                  f"Pearson={corr['pearson']:.3f} Dendro={corr['dendrogram']:.3f}")
+            print(f"    corr (test_cat ranks): Spearman={corr['spearman']:.3f} "
+                  f"Pearson={corr['pearson']:.3f} CPCC={corr['cpcc']:.3f} "
+                  f"Dendro={corr['dendrogram']:.3f}")
 
         del model
         if device.type == "cuda":
