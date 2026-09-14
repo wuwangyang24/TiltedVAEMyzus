@@ -66,6 +66,7 @@ Usage:
 """
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -142,6 +143,7 @@ class InatDataset(Dataset):
 
 def parse_inat_taxonomy(
     metadata_path: str, image_dir: str, superclass: Optional[str],
+    required_ranks: Optional[List[str]] = None,
 ) -> Tuple[List[str], List[Tuple[str, ...]]]:
     """Parse iNat metadata into (paths, taxonomy_tuples) for one superclass."""
     with open(metadata_path) as f:
@@ -159,6 +161,9 @@ def parse_inat_taxonomy(
             continue
         cat_info = cat_map[cat_id]
         if sc is not None and str(cat_info.get("supercategory", "")).lower() != sc:
+            continue
+        # ``InatDataModule._parse_inat_json`` drops samples missing a test_cat rank.
+        if required_ranks and any(cat_info.get(r) is None for r in required_ranks):
             continue
         paths.append(os.path.join(image_dir, img_map[img_id]))
         taxa.append(tuple(str(cat_info.get(rank, "")) for rank in RANKS))
@@ -229,6 +234,7 @@ def build_transform(img_size: int) -> T.Compose:
 def encode_paths(
     model: torch.nn.Module, paths: List[str], transform: T.Compose,
     batch_size: int, device: torch.device, num_workers: int,
+    amp_dtype: Optional[torch.dtype] = torch.bfloat16,
 ) -> torch.Tensor:
     dataset = InatDataset(paths, transform)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False,
@@ -236,7 +242,12 @@ def encode_paths(
     collected: List[torch.Tensor] = []
     indices: List[torch.Tensor] = []
     for imgs, idx in tqdm(loader, desc="  encoding", leave=False):
-        collected.append(model.encode(imgs.to(device), normalize=True).cpu())
+        ctx = (torch.autocast(device_type=device.type, dtype=amp_dtype)
+               if amp_dtype is not None else contextlib.nullcontext())
+        with ctx:
+            z = model.encode(imgs.to(device), normalize=True)
+        # Keep the reduced-precision rounding, but accumulate in fp32.
+        collected.append(z.float().cpu())
         indices.append(idx)
     if not collected:
         return torch.empty(0)
@@ -530,6 +541,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--batch_size", type=int, default=128)
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--device", default=None)
+    p.add_argument("--precision", default="bf16", choices=["bf16", "fp16", "fp32"],
+                   help="Autocast dtype for encoding (bf16 matches training)")
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
@@ -538,6 +551,9 @@ def main() -> None:
     args = parse_args()
     device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
     torch.manual_seed(args.seed)
+
+    amp_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16,
+                 "fp32": None}[args.precision]
 
     with open(args.config) as f:
         cfg = json.load(f)
@@ -550,8 +566,9 @@ def main() -> None:
         if tc["rank"] not in RANKS:
             raise SystemExit(f"test_cat rank '{tc['rank']}' not in {RANKS}")
 
-    # Correlation ranks = the test_cat columns of ``val_test_labels``, coarse -> fine.
-    corr_rank_indices = sorted(RANKS.index(tc["rank"]) for tc in test_cats)
+    # Correlation ranks = the test_cat columns of ``val_test_labels``; the config
+    # order is preserved because the LCA depth assumes coarse -> fine.
+    corr_rank_indices = [RANKS.index(tc["rank"]) for tc in test_cats]
 
     # results_acc[metric][test_cat_label][method][superclass] = value
     results_acc: dict = {
@@ -573,7 +590,8 @@ def main() -> None:
 
         for sc in superclasses:
             paths, taxa = parse_inat_taxonomy(
-                cfg["test_metadata"], cfg["test_image_dir"], sc)
+                cfg["test_metadata"], cfg["test_image_dir"], sc,
+                required_ranks=[tc["rank"] for tc in test_cats])
             if not paths:
                 print(f"  [{sc}] no images, skipping")
                 continue
@@ -586,7 +604,7 @@ def main() -> None:
             print(f"  [{sc}] encoding {len(paths)} images over "
                   f"{len(set(taxa))} species...")
             embeddings = encode_paths(model, paths, transform, args.batch_size,
-                                      device, args.num_workers)
+                                      device, args.num_workers, amp_dtype)
 
             corr = correlation_metrics(embeddings, taxa, corr_rank_indices,
                                        args.metric, args.linkage,
