@@ -148,7 +148,8 @@ class BestValLossReporter(Callback):
                 print(f"[report] skipped Excel workbook generation: {e}")
 
 from Models import VAE, TiltedVAE, DinoV2LoRA, Backbone
-from dataset import VAEDataModule, ContrastiveDataModule, InatDataModule
+from dataset import (VAEDataModule, ContrastiveDataModule, InatDataModule,
+                     FGVCAircraftDataModule)
 from experiment import VAEExperiment
 from contrastive_experiment import ContrastiveExperiment, LeJEPAExperiment
 
@@ -163,17 +164,19 @@ def parse_args() -> argparse.Namespace:
 
     # Data
     parser.add_argument("--dataset", type=str, default="myzus",
-                        choices=["myzus", "inat"],
-                        help="Dataset to use: 'myzus' (default synthesis-program dataset) "
-                             "or 'inat' (iNaturalist 2021 mini)")
+                        choices=["myzus", "inat", "aircraft"],
+                        help="Dataset to use: 'myzus' (default synthesis-program dataset), "
+                             "'inat' (iNaturalist 2021 mini) or 'aircraft' (FGVC-Aircraft)")
     parser.add_argument("--train_cat", type=str, default="class",
                         help="Taxonomy level for contrastive training labels (inat only). "
-                             "Options: kingdom, phylum, class, order, family, genus")
+                             "Options: kingdom, phylum, class, order, family, genus. "
+                             "For --dataset aircraft: manufacturer, family or variant.")
     parser.add_argument("--test_cat", type=str, nargs="+", default=["phylum"],
                         help="Taxonomy level(s) for kNN / linear-probe evaluation "
                              "labels (inat only). One or more of: kingdom, phylum, "
                              "class, order, family, genus. When several are given, "
-                             "kNN and linear-probe metrics are logged for each.")
+                             "kNN and linear-probe metrics are logged for each. "
+                             "For --dataset aircraft: manufacturer, family or variant.")
     parser.add_argument("--superclass", type=str, default=None,
                         help="Keep only iNat categories whose 'supercategory' matches "
                              "this value (e.g. Plants, Insects). inat only.")
@@ -185,6 +188,17 @@ def parse_args() -> argparse.Namespace:
                         help="Directory containing iNat2021 training images")
     parser.add_argument("--inat_val_dir", type=str, default="inat2021/val",
                         help="Directory containing iNat2021 validation images")
+    parser.add_argument("--aircraft_root", type=str, default="data/fgvc_aircraft",
+                        help="Root directory for torchvision's FGVCAircraft dataset "
+                             "(aircraft only)")
+    parser.add_argument("--aircraft_train_split", type=str, default="trainval",
+                        choices=["train", "val", "trainval"],
+                        help="FGVC-Aircraft split used for training")
+    parser.add_argument("--aircraft_val_split", type=str, default="test",
+                        choices=["train", "val", "trainval", "test"],
+                        help="FGVC-Aircraft split used for evaluation")
+    parser.add_argument("--aircraft_download", action="store_true",
+                        help="Download the FGVC-Aircraft archive if it is missing")
     parser.add_argument("--data_dir", type=str, default=None,
                         help="Path to the image dataset (any nested folder layout). "
                              "Required for the VAE models; ignored for --model dino_lora, "
@@ -528,6 +542,22 @@ def main() -> None:
                 superclass=args.superclass,
                 seed=args.seed,
             )
+        elif args.dataset == "aircraft":
+            # FGVC-Aircraft (manufacturer / family / variant hierarchy)
+            datamodule = FGVCAircraftDataModule(
+                root=args.aircraft_root,
+                train_split=args.aircraft_train_split,
+                val_split=args.aircraft_val_split,
+                train_cat=args.train_cat,
+                test_cat=args.test_cat,
+                img_size=args.img_size,
+                batch_size=args.batch_size,
+                num_workers=args.num_workers,
+                classes_per_batch=args.contrastive_classes_per_batch,
+                samples_per_class=args.contrastive_samples_per_class,
+                download=args.aircraft_download,
+                seed=args.seed,
+            )
         else:
             # Myzus (default) dataset
             missing = [name for name, val in (
@@ -573,7 +603,8 @@ def main() -> None:
         num_classes = None
         if args.cross_entropy:
             datamodule.setup()
-            num_classes = (datamodule.num_train_classes if args.dataset == "inat"
+            num_classes = (datamodule.num_train_classes
+                           if args.dataset in ("inat", "aircraft")
                            else datamodule.num_classes)
 
         if is_backbone:
@@ -731,9 +762,13 @@ def main() -> None:
         k_val = args.contrastive_samples_per_class
         level_tag = "_Comp" if args.compound_level else ""
         test_cat_tag = "-".join(args.test_cat)
-        dataset_tag = f"_inat_{args.train_cat}->{test_cat_tag}" if args.dataset == "inat" else ""
-        if args.dataset == "inat" and args.superclass:
-            dataset_tag += f"_{args.superclass}"
+        dataset_tag = ""
+        if args.dataset == "inat":
+            dataset_tag = f"_inat_{args.train_cat}->{test_cat_tag}"
+            if args.superclass:
+                dataset_tag += f"_{args.superclass}"
+        elif args.dataset == "aircraft":
+            dataset_tag = f"_aircraft_{args.train_cat}->{test_cat_tag}"
         if is_backbone:
             # "FFT" = full fine-tuning; short per-architecture tag.
             backbone_tag = {
@@ -890,6 +925,8 @@ def main() -> None:
             model_folder = "dino_lora"
         if args.dataset == "inat":
             dataset_folder = args.superclass or f"{args.train_cat}_to_{'-'.join(args.test_cat)}"
+        elif args.dataset == "aircraft":
+            dataset_folder = f"aircraft_{args.train_cat}_to_{'-'.join(args.test_cat)}"
         else:
             dataset_folder = args.dataset
 
