@@ -598,16 +598,23 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--probe_epochs", type=int, default=100)
     p.add_argument("--batch_size", type=int, default=128)
     p.add_argument("--num_workers", type=int, default=4)
-    p.add_argument("--device", default=None)
+    p.add_argument("--device", default=None,
+                   help="'cuda', 'cpu', 'cuda:1' or a bare GPU index such as '0'")
     p.add_argument("--precision", default="bf16", choices=["bf16", "fp16", "fp32"],
                    help="Autocast dtype for encoding (bf16 matches training)")
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
 
+def resolve_device(spec: Optional[str]) -> torch.device:
+    if not spec:
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    return torch.device(f"cuda:{spec}" if spec.isdigit() else spec)
+
+
 def main() -> None:
     args = parse_args()
-    device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    device = resolve_device(args.device)
     torch.manual_seed(args.seed)
 
     amp_dtype = {"bf16": torch.bfloat16, "fp16": torch.float16,
