@@ -1,6 +1,6 @@
-"""Taxonomic benchmark on the iNat test set for a set of frozen backbones.
+"""Taxonomic benchmark on the iNat (or FGVC-Aircraft) test set for frozen backbones.
 
-For every (superclass x test_cat x backbone) combination this encodes the iNat
+For every (superclass x test_cat x backbone) combination this encodes the
 test images once with the *frozen* backbone and reports six metrics:
 
   * kNN-1  : top-1 accuracy of a 1-nearest-neighbour classifier (cosine,
@@ -58,10 +58,28 @@ ImageNet-pretrained backbones are supported: ``resnet50``,
       ]
     }
 
+FGVC-Aircraft is supported with ``"dataset": "aircraft"``; its hierarchy is
+``manufacturer`` -> ``family`` -> ``variant`` and ``superclasses`` (optional,
+defaults to ``["Aircraft"]``) are manufacturer names used to split the columns:
+
+    {
+      "dataset": "aircraft",
+      "aircraft_root": "data/fgvc",
+      "aircraft_split": "test",
+      "aircraft_download": false,
+      "superclasses": ["Aircraft"],
+      "test_cats": [
+        {"rank": "manufacturer", "label": "M"},
+        {"rank": "family",       "label": "F"},
+        {"rank": "variant",      "label": "V"}
+      ],
+      "backbones": [...]
+    }
+
 Usage:
-    python Tests/inat_taxonomic_benchmark_test.py \
-        --config Tests/benchmark_config.json \
-        --output_dir results/benchmark_tables \
+    python Tests/inat_taxonomic_benchmark_test.py \\
+        --config Tests/benchmark_config.json \\
+        --output_dir results/benchmark_tables \\
         --batch_size 128 --device cuda
 """
 
@@ -103,6 +121,12 @@ SUPPORTED_BACKBONES = (
 # so identical names under different ancestors never collapse together.
 RANKS = ["kingdom", "phylum", "class", "order", "family", "genus",
          "specific_epithet"]
+
+# FGVC-Aircraft hierarchy (coarse -> fine), matching ``dataset.AIRCRAFT_LEVELS``.
+AIRCRAFT_RANKS = ["manufacturer", "family", "variant"]
+
+# Column name used when an aircraft config does not split by manufacturer.
+AIRCRAFT_ALL_SUPERCLASS = "Aircraft"
 
 # Per-``test_cat`` accuracy metrics -> (table label, caption fragment).
 ACC_METRICS: List[Tuple[str, str, str]] = [
@@ -167,6 +191,40 @@ def parse_inat_taxonomy(
             continue
         paths.append(os.path.join(image_dir, img_map[img_id]))
         taxa.append(tuple(str(cat_info.get(rank, "")) for rank in RANKS))
+    return paths, taxa
+
+
+def parse_aircraft_taxonomy(
+    root: str, split: str, superclass: Optional[str], download: bool = False,
+) -> Tuple[List[str], List[Tuple[str, ...]]]:
+    """Parse FGVC-Aircraft into (paths, taxonomy_tuples) over ``AIRCRAFT_RANKS``.
+
+    ``superclass`` (when not the catch-all column) filters by manufacturer.
+    """
+    from torchvision.datasets import FGVCAircraft
+
+    per_level: Dict[str, Dict[str, str]] = {}
+    files: Optional[List[str]] = None
+    for level in AIRCRAFT_RANKS:
+        ds = FGVCAircraft(root=root, split=split, annotation_level=level,
+                          download=download)
+        per_level[level] = {str(p): ds.classes[l]
+                            for p, l in zip(ds._image_files, ds._labels)}
+        if files is None:
+            files = [str(p) for p in ds._image_files]
+
+    sc = superclass.lower() if superclass else None
+    if sc == AIRCRAFT_ALL_SUPERCLASS.lower():
+        sc = None
+
+    paths: List[str] = []
+    taxa: List[Tuple[str, ...]] = []
+    for path in (files or []):
+        tax = tuple(per_level[r][path] for r in AIRCRAFT_RANKS)
+        if sc is not None and tax[0].lower() != sc:
+            continue
+        paths.append(path)
+        taxa.append(tax)
     return paths, taxa
 
 
@@ -517,7 +575,7 @@ def build_latex_table_flat(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Taxonomic benchmark (kNN / linear-probe / cophenetic) on iNat")
+        description="Taxonomic benchmark (kNN / linear-probe / cophenetic) on iNat or FGVC-Aircraft")
     p.add_argument("--config", required=True, help="JSON benchmark config (see docstring)")
     p.add_argument("--output_dir", default=None,
                    help="If set, write one <metric>.tex table and results.json here")
@@ -533,7 +591,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--coph_seed", type=int, default=COPH_SEED,
                    help="Seed for the correlation-metric subsample")
     p.add_argument("--max_species", type=int, default=None,
-                   help="Optional cap on distinct species per superclass (random subset)")
+                   help="Optional cap on distinct leaf classes per superclass (random subset)")
     p.add_argument("--max_samples", type=int, default=None,
                    help="Optional cap on images per (backbone, superclass)")
     p.add_argument("--probe_lr", type=float, default=0.1)
@@ -558,17 +616,27 @@ def main() -> None:
     with open(args.config) as f:
         cfg = json.load(f)
 
-    superclasses: List[str] = cfg["superclasses"]
     test_cats: List[dict] = cfg["test_cats"]
     backbones: List[dict] = cfg["backbones"]
     methods = [b["name"] for b in backbones]
+
+    dataset_kind = str(cfg.get("dataset", "inat")).lower()
+    if dataset_kind not in ("inat", "aircraft"):
+        raise SystemExit(f"Unknown dataset '{dataset_kind}' (use 'inat' or 'aircraft')")
+    if dataset_kind == "aircraft":
+        ranks = AIRCRAFT_RANKS
+        superclasses = cfg.get("superclasses") or [AIRCRAFT_ALL_SUPERCLASS]
+    else:
+        ranks = RANKS
+        superclasses = cfg["superclasses"]
+
     for tc in test_cats:
-        if tc["rank"] not in RANKS:
-            raise SystemExit(f"test_cat rank '{tc['rank']}' not in {RANKS}")
+        if tc["rank"] not in ranks:
+            raise SystemExit(f"test_cat rank '{tc['rank']}' not in {ranks}")
 
     # Correlation ranks = the test_cat columns of ``val_test_labels``; the config
     # order is preserved because the LCA depth assumes coarse -> fine.
-    corr_rank_indices = [RANKS.index(tc["rank"]) for tc in test_cats]
+    corr_rank_indices = [ranks.index(tc["rank"]) for tc in test_cats]
 
     # results_acc[metric][test_cat_label][method][superclass] = value
     results_acc: dict = {
@@ -589,9 +657,14 @@ def main() -> None:
         model = build_encoder(backbone_cfg).to(device).eval()
 
         for sc in superclasses:
-            paths, taxa = parse_inat_taxonomy(
-                cfg["test_metadata"], cfg["test_image_dir"], sc,
-                required_ranks=[tc["rank"] for tc in test_cats])
+            if dataset_kind == "aircraft":
+                paths, taxa = parse_aircraft_taxonomy(
+                    cfg["aircraft_root"], cfg.get("aircraft_split", "test"), sc,
+                    download=bool(cfg.get("aircraft_download", False)))
+            else:
+                paths, taxa = parse_inat_taxonomy(
+                    cfg["test_metadata"], cfg["test_image_dir"], sc,
+                    required_ranks=[tc["rank"] for tc in test_cats])
             if not paths:
                 print(f"  [{sc}] no images, skipping")
                 continue
@@ -602,7 +675,7 @@ def main() -> None:
                 continue
 
             print(f"  [{sc}] encoding {len(paths)} images over "
-                  f"{len(set(taxa))} species...")
+                  f"{len(set(taxa))} classes...")
             embeddings = encode_paths(model, paths, transform, args.batch_size,
                                       device, args.num_workers, amp_dtype)
 
@@ -613,7 +686,7 @@ def main() -> None:
                 results_corr[mk][name][sc] = corr[mk]
 
             for tc in test_cats:
-                rank_idx = RANKS.index(tc["rank"])
+                rank_idx = ranks.index(tc["rank"])
                 labels = labels_at_rank(taxa, rank_idx)
 
                 knn = knn_accuracy(embeddings, labels, ks=(1, 5))
