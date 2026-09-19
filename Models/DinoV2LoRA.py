@@ -133,6 +133,7 @@ class DinoV2LoRA(nn.Module):
                  grad_checkpointing: bool = False,
                  num_classes: Optional[int] = None,
                  cross_entropy: bool = False,
+                 grafit_predictor: bool = False,
                  pretrained: bool = True) -> None:
         super().__init__()
 
@@ -198,6 +199,19 @@ class DinoV2LoRA(nn.Module):
             self.classifier = nn.Linear(clf_in, num_classes)
         else:
             self.classifier = None
+
+        # BYOL-style predictor for Grafit's instance-level term: it sits on the
+        # online branch only, which is what breaks the collapse symmetry.
+        if grafit_predictor:
+            pred_dim = embedding_dim if self.use_proj_head else feat_dim
+            self.grafit_predictor = nn.Sequential(
+                nn.Linear(pred_dim, proj_hidden_dim),
+                nn.BatchNorm1d(proj_hidden_dim),
+                nn.ReLU(inplace=True),
+                nn.Linear(proj_hidden_dim, pred_dim),
+            )
+        else:
+            self.grafit_predictor = None
 
         # Stateful DCL+SIGReg loss with its EMA class-mean memory bank.
         self.dcl_sigreg_loss = DCLSIGRegLoss(
@@ -283,6 +297,13 @@ class DinoV2LoRA(nn.Module):
         self, embeddings: Tensor, labels: Tensor, **kwargs,
     ) -> Dict[str, Tensor]:
         return multi_similarity_loss(embeddings, labels, **kwargs)
+
+    def grafit_predict(self, embeddings: Tensor) -> Tensor:
+        """Normalized predictor output q(g(x)) for Grafit's instance term."""
+        if self.grafit_predictor is None:
+            raise RuntimeError(
+                "Model was built without grafit_predictor=True.")
+        return F.normalize(self.grafit_predictor(embeddings), dim=1)
 
     def grafit_loss_function(
         self, embeddings: Tensor, labels: Tensor, **kwargs,

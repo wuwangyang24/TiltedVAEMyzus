@@ -7,7 +7,7 @@ from .supcon_softpos import SupConSoftPosLoss
 from .vanilla_dcl import vanilla_dcl_loss
 from .vanilla_supcon import vanilla_supcon_loss
 from .ms_loss import multi_similarity_loss
-from .grafit import grafit_loss
+from .grafit import grafit_loss, GrafitMemoryBank
 from .lejepa import lejepa_loss
 from .utils import sigreg_loss, batch_knn_accuracy, gaussianity_metrics
 
@@ -22,6 +22,7 @@ __all__ = [
     "vanilla_supcon_loss",
     "multi_similarity_loss",
     "grafit_loss",
+    "GrafitMemoryBank",
     "lejepa_loss",
     "sigreg_loss",
     "batch_knn_accuracy",

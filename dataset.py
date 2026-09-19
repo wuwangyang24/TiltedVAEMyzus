@@ -240,14 +240,16 @@ class ContrastiveImageDataset(Dataset):
 
     With ``num_views > 1`` the (stochastic) transform is drawn ``num_views``
     times per image and the item becomes ``([num_views, C, H, W], label_idx)``;
-    this is what Grafit's instance-level term needs.
+    this is what Grafit's instance-level term needs. ``return_index`` appends
+    the dataset index, which addresses Grafit's memory-bank slots.
     """
 
     def __init__(self, samples: List[Tuple[str, int]], transform: T.Compose,
-                 num_views: int = 1) -> None:
+                 num_views: int = 1, return_index: bool = False) -> None:
         self.samples = samples
         self.transform = transform
         self.num_views = num_views
+        self.return_index = return_index
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -256,9 +258,12 @@ class ContrastiveImageDataset(Dataset):
         path, label = self.samples[index]
         img = read_image(path, mode=ImageReadMode.RGB)
         if self.num_views > 1:
-            views = torch.stack([self.transform(img) for _ in range(self.num_views)])
-            return views, label
-        return self.transform(img), label
+            image = torch.stack([self.transform(img) for _ in range(self.num_views)])
+        else:
+            image = self.transform(img)
+        if self.return_index:
+            return image, label, index
+        return image, label
 
 
 def build_ssl_transform(img_size: int, rotation: float = 30.0,
@@ -413,6 +418,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
                  ssl_gaussian_blur: float = 0.5,
                  ssl_compound_views: bool = False,
                  grafit_views: int = 0,
+                 grafit_bank: bool = False,
                  seed: int = 42) -> None:
         super().__init__()
         self.image_metadata_json = image_metadata_json
@@ -438,6 +444,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
         self.ssl_gaussian_blur = ssl_gaussian_blur
         self.ssl_compound_views = ssl_compound_views
         self.grafit_views = grafit_views
+        self.grafit_bank = grafit_bank
         self.seed = seed
 
         self.classes: List[str] = []
@@ -656,9 +663,11 @@ class ContrastiveDataModule(pl.LightningDataModule):
                 gaussian_blur=self.ssl_gaussian_blur,
             )
             self.train_dataset = ContrastiveImageDataset(
-                train_samples, view_transform, num_views=self.grafit_views)
+                train_samples, view_transform, num_views=self.grafit_views,
+                return_index=self.grafit_bank)
         else:
-            self.train_dataset = ContrastiveImageDataset(train_samples, transform)
+            self.train_dataset = ContrastiveImageDataset(
+                train_samples, transform, return_index=self.grafit_bank)
         self.val_dataset = ContrastiveImageDataset(val_samples, transform)
         self._train_labels = [label for _, label in train_samples]
         self._val_labels = [label for _, label in val_samples]
@@ -728,13 +737,17 @@ class InatContrastiveDataset(Dataset):
 
     With ``num_views > 1`` the (stochastic) transform is drawn ``num_views``
     times per image and the image becomes a ``[num_views, C, H, W]`` stack.
+    ``return_index`` appends the dataset index, which addresses Grafit's
+    memory-bank slots.
     """
 
     def __init__(self, samples: List[Tuple[str, int, Tuple[int, ...]]],
-                 transform: T.Compose, num_views: int = 1) -> None:
+                 transform: T.Compose, num_views: int = 1,
+                 return_index: bool = False) -> None:
         self.samples = samples
         self.transform = transform
         self.num_views = num_views
+        self.return_index = return_index
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -746,7 +759,10 @@ class InatContrastiveDataset(Dataset):
             image = torch.stack([self.transform(img) for _ in range(self.num_views)])
         else:
             image = self.transform(img)
-        return image, train_label, torch.tensor(test_labels, dtype=torch.long)
+        test_labels = torch.tensor(test_labels, dtype=torch.long)
+        if self.return_index:
+            return image, train_label, test_labels, index
+        return image, train_label, test_labels
 
 
 class InatDataModule(pl.LightningDataModule):
@@ -787,6 +803,7 @@ class InatDataModule(pl.LightningDataModule):
                  samples_per_class: int = 0,
                  superclass: Optional[str] = None,
                  grafit_views: int = 0,
+                 grafit_bank: bool = False,
                  seed: int = 42) -> None:
         super().__init__()
         self.train_metadata = train_metadata
@@ -802,6 +819,7 @@ class InatDataModule(pl.LightningDataModule):
         self.classes_per_batch = classes_per_batch
         self.samples_per_class = samples_per_class
         self.grafit_views = grafit_views
+        self.grafit_bank = grafit_bank
         self.seed = seed
 
         self.train_classes: List[str] = []
@@ -922,7 +940,8 @@ class InatDataModule(pl.LightningDataModule):
         transform = self._build_transform()
         self.train_dataset = InatContrastiveDataset(
             train_samples, self._train_transform(transform),
-            num_views=max(self.grafit_views, 1))
+            num_views=max(self.grafit_views, 1),
+            return_index=self.grafit_bank)
         self.val_dataset = InatContrastiveDataset(val_samples, transform)
 
         test_summary = ", ".join(
@@ -1020,6 +1039,7 @@ class FGVCAircraftDataModule(pl.LightningDataModule):
                  samples_per_class: int = 0,
                  download: bool = False,
                  grafit_views: int = 0,
+                 grafit_bank: bool = False,
                  seed: int = 42) -> None:
         super().__init__()
         self.root = root
@@ -1034,6 +1054,7 @@ class FGVCAircraftDataModule(pl.LightningDataModule):
         self.samples_per_class = samples_per_class
         self.download = download
         self.grafit_views = grafit_views
+        self.grafit_bank = grafit_bank
         self.seed = seed
 
         invalid = [c for c in [self.train_cat] + self.test_cats
@@ -1140,7 +1161,8 @@ class FGVCAircraftDataModule(pl.LightningDataModule):
         transform = self._build_transform()
         self.train_dataset = InatContrastiveDataset(
             train_samples, self._train_transform(transform),
-            num_views=max(self.grafit_views, 1))
+            num_views=max(self.grafit_views, 1),
+            return_index=self.grafit_bank)
         self.val_dataset = InatContrastiveDataset(val_samples, transform)
 
         test_summary = ", ".join(

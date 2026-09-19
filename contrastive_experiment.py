@@ -8,6 +8,7 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 
 from Models import DinoV2LoRA
+from Loss import GrafitMemoryBank
 
 
 class ContrastiveExperiment(pl.LightningModule):
@@ -47,7 +48,8 @@ class ContrastiveExperiment(pl.LightningModule):
                  ms_scale_pos: float = 2.0,
                  ms_scale_neg: float = 40.0,
                  grafit: bool = False,
-                 grafit_lam: float = 0.5,
+                 grafit_lam: float = 1.0,
+                 grafit_bank_size: int = 0,
                  cross_entropy: bool = False,
                  pos_weight_tau: float = 0.1,
                  supcon_soft_pos_tau: float = 0.1,
@@ -87,6 +89,11 @@ class ContrastiveExperiment(pl.LightningModule):
         self.ms_scale_neg = ms_scale_neg
         self.grafit = grafit
         self.grafit_lam = grafit_lam
+        # One memory-bank slot per training image, addressed by dataset index.
+        self.grafit_bank = (
+            GrafitMemoryBank(grafit_bank_size, model.embedding_dim)
+            if grafit and grafit_bank_size > 0 else None
+        )
         self.cross_entropy = cross_entropy
         self.pos_weight_tau = pos_weight_tau
         self.supcon_soft_pos_tau = supcon_soft_pos_tau
@@ -111,7 +118,8 @@ class ContrastiveExperiment(pl.LightningModule):
             raise ValueError("EMA_momentum must be in [0, 1)")
         self.EMA_pos_weight = EMA_pos_weight
         self.EMA_momentum = EMA_momentum
-        if EMA_pos_weight:
+        # Grafit's instance term needs the EMA target branch f_xi of Eq. 1.
+        if EMA_pos_weight or grafit:
             self.ema_model = copy.deepcopy(model)
             for p in self.ema_model.parameters():
                 p.requires_grad_(False)
@@ -167,6 +175,11 @@ class ContrastiveExperiment(pl.LightningModule):
         # Support both (images, labels) and (images, train_labels, test_labels).
         # ``test_labels`` may carry several evaluation taxonomy levels as a
         # (B, num_test_cats) tensor; the loss only monitors the first level.
+        # Grafit's memory bank additionally appends the dataset index, which
+        # only the train dataset yields.
+        sample_idx = None
+        if self.grafit_bank is not None and self.training:
+            *batch, sample_idx = batch
         if len(batch) == 3:
             images, labels, test_labels = batch
         else:
@@ -212,19 +225,26 @@ class ContrastiveExperiment(pl.LightningModule):
                 margin=self.ms_margin, scale_pos=self.ms_scale_pos,
                 scale_neg=self.ms_scale_neg)
         elif self.grafit:
-            # Multi-view train batches are (B, V, C, H, W); val stays (B, C, H, W),
-            # where the instance term has no positives.
+            # Multi-view train batches are (B, V, C, H, W); val stays
+            # (B, C, H, W), where only the coarse kNN term is defined.
             if images.ndim == 5:
                 b, v = images.shape[:2]
-                view_embeddings = self.model(images.flatten(0, 1))
-                view_embeddings = view_embeddings.view(b, v, -1).transpose(0, 1)
-                embeddings = view_embeddings[0]
+                flat = images.flatten(0, 1)
+                online = self.model(flat)
+                predictions = self.model.grafit_predict(online)
+                predictions = predictions.view(b, v, -1).transpose(0, 1)
+                with torch.no_grad():
+                    targets = self.ema_model(flat).view(b, v, -1).transpose(0, 1)
+                # The supervised term uses a single augmentation (paper B.1).
+                embeddings = online.view(b, v, -1)[:, 0]
             else:
-                view_embeddings = self.model(images)
-                embeddings = view_embeddings
+                embeddings = self.model(images)
+                predictions = targets = None
             loss_dict = self.model.grafit_loss_function(
-                view_embeddings, labels, lam=self.grafit_lam,
-                temperature=self.temperature)
+                embeddings, labels, lam=self.grafit_lam,
+                temperature=self.temperature,
+                predictions=predictions, targets=targets,
+                bank=self.grafit_bank, sample_idx=sample_idx)
         elif self.infonce_softpos:
             embeddings = self.model(images)
             loss_dict = self.model.infonce_softpos_loss_function(
