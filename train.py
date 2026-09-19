@@ -373,6 +373,17 @@ def parse_args() -> argparse.Namespace:
                         help="Multi-Similarity positive scale (alpha). Default: 2.0")
     parser.add_argument("--ms_scale_neg", type=float, default=40.0,
                         help="Multi-Similarity negative scale (beta). Default: 40.0")
+    parser.add_argument("--grafit", action="store_true",
+                        help="Use the Grafit loss (Touvron et al., 2020): a convex "
+                             "mix of an instance-level term (augmented views of the "
+                             "same image as positives) and a coarse-label term.")
+    parser.add_argument("--grafit_lam", type=float, default=0.5,
+                        help="Grafit mixing weight: lam*instance + (1-lam)*coarse. "
+                             "Default: 0.5")
+    parser.add_argument("--grafit_views", type=int, default=2,
+                        help="Augmented views per image in the training batches when "
+                             "--grafit is set (the instance-level positives). "
+                             "Default: 2")
     parser.add_argument("--cross_entropy", action="store_true",
                         help="Supervised cross-entropy baseline: train a linear "
                              "classifier on the (normalized) embedding over the "
@@ -519,6 +530,9 @@ def main() -> None:
     is_backbone = args.model == "backbone"
     is_contrastive = is_dino or is_backbone
 
+    # Multi-view batches are only meaningful for Grafit's instance-level term.
+    grafit_views = args.grafit_views if args.grafit else 0
+
     if is_contrastive:
         # DINOv2 expects 3-channel, patch14-compatible inputs. Force a valid
         # image size (multiple of 14) and RGB regardless of the VAE defaults.
@@ -544,6 +558,7 @@ def main() -> None:
                 classes_per_batch=args.contrastive_classes_per_batch,
                 samples_per_class=args.contrastive_samples_per_class,
                 superclass=args.superclass,
+                grafit_views=grafit_views,
                 seed=args.seed,
             )
         elif args.dataset == "aircraft":
@@ -560,6 +575,7 @@ def main() -> None:
                 classes_per_batch=args.contrastive_classes_per_batch,
                 samples_per_class=args.contrastive_samples_per_class,
                 download=args.aircraft_download,
+                grafit_views=grafit_views,
                 seed=args.seed,
             )
         else:
@@ -598,6 +614,7 @@ def main() -> None:
                 ssl_min_scale=args.ssl_min_scale,
                 ssl_gaussian_blur=args.ssl_gaussian_blur,
                 ssl_compound_views=args.ssl_compound_views,
+                grafit_views=grafit_views,
                 seed=args.seed,
             )
 
@@ -699,6 +716,8 @@ def main() -> None:
                 ms_margin=args.ms_margin,
                 ms_scale_pos=args.ms_scale_pos,
                 ms_scale_neg=args.ms_scale_neg,
+                grafit=args.grafit,
+                grafit_lam=args.grafit_lam,
                 infonce_softpos=args.infonce_softpos,
                 supcon_softpos=args.supcon_soft_pos_loss,
                 cross_entropy=args.cross_entropy,
@@ -819,6 +838,9 @@ def main() -> None:
                 f"-A{args.ms_scale_pos}-B{args.ms_scale_neg}"
             ) if args.ms_loss else ""
             cross_entropy_tag = "_CrossEntropy" if args.cross_entropy else ""
+            grafit_tag = (
+                f"_Grafit-Lam{args.grafit_lam}-Views{args.grafit_views}"
+            ) if args.grafit else ""
             infonce_softpos_tag = (
                 f"_InfoNCESoftPos-Tau{args.pos_weight_tau}"
                 f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
@@ -845,6 +867,7 @@ def main() -> None:
                 f"{vanilla_dcl_tag}"
                 f"{vanilla_supcon_tag}"
                 f"{ms_loss_tag}"
+                f"{grafit_tag}"
                 f"{cross_entropy_tag}"
                 f"{infonce_softpos_tag}"
                 f"{supcon_softpos_tag}"

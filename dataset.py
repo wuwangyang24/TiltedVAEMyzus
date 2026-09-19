@@ -237,11 +237,17 @@ class ContrastiveImageDataset(Dataset):
     Each item is ``(image_tensor, label_idx)`` where ``label_idx`` is the
     integer-encoded synthesis-program class. Images are resized, scaled to
     ``[0, 1]``, and normalized with ImageNet statistics (matching DINOv2).
+
+    With ``num_views > 1`` the (stochastic) transform is drawn ``num_views``
+    times per image and the item becomes ``([num_views, C, H, W], label_idx)``;
+    this is what Grafit's instance-level term needs.
     """
 
-    def __init__(self, samples: List[Tuple[str, int]], transform: T.Compose) -> None:
+    def __init__(self, samples: List[Tuple[str, int]], transform: T.Compose,
+                 num_views: int = 1) -> None:
         self.samples = samples
         self.transform = transform
+        self.num_views = num_views
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -249,6 +255,9 @@ class ContrastiveImageDataset(Dataset):
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, int]:
         path, label = self.samples[index]
         img = read_image(path, mode=ImageReadMode.RGB)
+        if self.num_views > 1:
+            views = torch.stack([self.transform(img) for _ in range(self.num_views)])
+            return views, label
         return self.transform(img), label
 
 
@@ -403,6 +412,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
                  ssl_min_scale: float = 0.5,
                  ssl_gaussian_blur: float = 0.5,
                  ssl_compound_views: bool = False,
+                 grafit_views: int = 0,
                  seed: int = 42) -> None:
         super().__init__()
         self.image_metadata_json = image_metadata_json
@@ -427,6 +437,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
         self.ssl_min_scale = ssl_min_scale
         self.ssl_gaussian_blur = ssl_gaussian_blur
         self.ssl_compound_views = ssl_compound_views
+        self.grafit_views = grafit_views
         self.seed = seed
 
         self.classes: List[str] = []
@@ -634,7 +645,20 @@ class ContrastiveDataModule(pl.LightningDataModule):
             return
 
         transform = self._build_transform()
-        self.train_dataset = ContrastiveImageDataset(train_samples, transform)
+        if self.grafit_views > 1:
+            # Grafit's instance term needs several augmented crops of the same
+            # image; validation stays single-view for honest kNN metrics.
+            view_transform = build_ssl_transform(
+                self.img_size,
+                rotation=self.ssl_rotation,
+                translate=self.ssl_translate,
+                min_scale=self.ssl_min_scale,
+                gaussian_blur=self.ssl_gaussian_blur,
+            )
+            self.train_dataset = ContrastiveImageDataset(
+                train_samples, view_transform, num_views=self.grafit_views)
+        else:
+            self.train_dataset = ContrastiveImageDataset(train_samples, transform)
         self.val_dataset = ContrastiveImageDataset(val_samples, transform)
         self._train_labels = [label for _, label in train_samples]
         self._val_labels = [label for _, label in val_samples]
@@ -701,12 +725,16 @@ class InatContrastiveDataset(Dataset):
     ``train_label`` is used for contrastive loss and ``test_labels`` is a
     1-D tensor of evaluation labels, one per requested ``test_cat`` taxonomy
     level, used for kNN / linear-probe evaluation.
+
+    With ``num_views > 1`` the (stochastic) transform is drawn ``num_views``
+    times per image and the image becomes a ``[num_views, C, H, W]`` stack.
     """
 
     def __init__(self, samples: List[Tuple[str, int, Tuple[int, ...]]],
-                 transform: T.Compose) -> None:
+                 transform: T.Compose, num_views: int = 1) -> None:
         self.samples = samples
         self.transform = transform
+        self.num_views = num_views
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -714,7 +742,11 @@ class InatContrastiveDataset(Dataset):
     def __getitem__(self, index: int) -> Tuple[torch.Tensor, int, torch.Tensor]:
         path, train_label, test_labels = self.samples[index]
         img = read_image(path, mode=ImageReadMode.RGB)
-        return self.transform(img), train_label, torch.tensor(test_labels, dtype=torch.long)
+        if self.num_views > 1:
+            image = torch.stack([self.transform(img) for _ in range(self.num_views)])
+        else:
+            image = self.transform(img)
+        return image, train_label, torch.tensor(test_labels, dtype=torch.long)
 
 
 class InatDataModule(pl.LightningDataModule):
@@ -754,6 +786,7 @@ class InatDataModule(pl.LightningDataModule):
                  classes_per_batch: int = 0,
                  samples_per_class: int = 0,
                  superclass: Optional[str] = None,
+                 grafit_views: int = 0,
                  seed: int = 42) -> None:
         super().__init__()
         self.train_metadata = train_metadata
@@ -768,6 +801,7 @@ class InatDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.classes_per_batch = classes_per_batch
         self.samples_per_class = samples_per_class
+        self.grafit_views = grafit_views
         self.seed = seed
 
         self.train_classes: List[str] = []
@@ -795,6 +829,13 @@ class InatDataModule(pl.LightningDataModule):
             T.ConvertImageDtype(torch.float32),
             T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
         ])
+
+    def _train_transform(self, transform: T.Compose) -> T.Compose:
+        # Grafit's instance term needs stochastic crops so that the views of an
+        # image differ; otherwise the deterministic eval transform is used.
+        if self.grafit_views > 1:
+            return build_ssl_transform(self.img_size)
+        return transform
 
     @staticmethod
     def _parse_inat_json(metadata_path: str, image_dir: str,
@@ -879,7 +920,9 @@ class InatDataModule(pl.LightningDataModule):
         self._val_labels = [s[1] for s in val_samples]
 
         transform = self._build_transform()
-        self.train_dataset = InatContrastiveDataset(train_samples, transform)
+        self.train_dataset = InatContrastiveDataset(
+            train_samples, self._train_transform(transform),
+            num_views=max(self.grafit_views, 1))
         self.val_dataset = InatContrastiveDataset(val_samples, transform)
 
         test_summary = ", ".join(
@@ -976,6 +1019,7 @@ class FGVCAircraftDataModule(pl.LightningDataModule):
                  classes_per_batch: int = 0,
                  samples_per_class: int = 0,
                  download: bool = False,
+                 grafit_views: int = 0,
                  seed: int = 42) -> None:
         super().__init__()
         self.root = root
@@ -989,6 +1033,7 @@ class FGVCAircraftDataModule(pl.LightningDataModule):
         self.classes_per_batch = classes_per_batch
         self.samples_per_class = samples_per_class
         self.download = download
+        self.grafit_views = grafit_views
         self.seed = seed
 
         invalid = [c for c in [self.train_cat] + self.test_cats
@@ -1024,6 +1069,13 @@ class FGVCAircraftDataModule(pl.LightningDataModule):
             T.ConvertImageDtype(torch.float32),
             T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
         ])
+
+    def _train_transform(self, transform: T.Compose) -> T.Compose:
+        # Grafit's instance term needs stochastic crops so that the views of an
+        # image differ; otherwise the deterministic eval transform is used.
+        if self.grafit_views > 1:
+            return build_ssl_transform(self.img_size)
+        return transform
 
     def prepare_data(self) -> None:
         if self.download:
@@ -1086,7 +1138,9 @@ class FGVCAircraftDataModule(pl.LightningDataModule):
         self._val_labels = [s[1] for s in val_samples]
 
         transform = self._build_transform()
-        self.train_dataset = InatContrastiveDataset(train_samples, transform)
+        self.train_dataset = InatContrastiveDataset(
+            train_samples, self._train_transform(transform),
+            num_views=max(self.grafit_views, 1))
         self.val_dataset = InatContrastiveDataset(val_samples, transform)
 
         test_summary = ", ".join(

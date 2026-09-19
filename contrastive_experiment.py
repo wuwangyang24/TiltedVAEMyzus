@@ -46,6 +46,8 @@ class ContrastiveExperiment(pl.LightningModule):
                  ms_margin: float = 0.1,
                  ms_scale_pos: float = 2.0,
                  ms_scale_neg: float = 40.0,
+                 grafit: bool = False,
+                 grafit_lam: float = 0.5,
                  cross_entropy: bool = False,
                  pos_weight_tau: float = 0.1,
                  supcon_soft_pos_tau: float = 0.1,
@@ -83,6 +85,8 @@ class ContrastiveExperiment(pl.LightningModule):
         self.ms_margin = ms_margin
         self.ms_scale_pos = ms_scale_pos
         self.ms_scale_neg = ms_scale_neg
+        self.grafit = grafit
+        self.grafit_lam = grafit_lam
         self.cross_entropy = cross_entropy
         self.pos_weight_tau = pos_weight_tau
         self.supcon_soft_pos_tau = supcon_soft_pos_tau
@@ -207,6 +211,20 @@ class ContrastiveExperiment(pl.LightningModule):
                 embeddings, labels, thresh=self.ms_thresh,
                 margin=self.ms_margin, scale_pos=self.ms_scale_pos,
                 scale_neg=self.ms_scale_neg)
+        elif self.grafit:
+            # Multi-view train batches are (B, V, C, H, W); val stays (B, C, H, W),
+            # where the instance term has no positives.
+            if images.ndim == 5:
+                b, v = images.shape[:2]
+                view_embeddings = self.model(images.flatten(0, 1))
+                view_embeddings = view_embeddings.view(b, v, -1).transpose(0, 1)
+                embeddings = view_embeddings[0]
+            else:
+                view_embeddings = self.model(images)
+                embeddings = view_embeddings
+            loss_dict = self.model.grafit_loss_function(
+                view_embeddings, labels, lam=self.grafit_lam,
+                temperature=self.temperature)
         elif self.infonce_softpos:
             embeddings = self.model(images)
             loss_dict = self.model.infonce_softpos_loss_function(
