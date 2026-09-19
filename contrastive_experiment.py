@@ -91,7 +91,8 @@ class ContrastiveExperiment(pl.LightningModule):
         self.grafit_lam = grafit_lam
         # One memory-bank slot per training image, addressed by dataset index.
         self.grafit_bank = (
-            GrafitMemoryBank(grafit_bank_size, model.embedding_dim)
+            GrafitMemoryBank(grafit_bank_size,
+                             getattr(model, "output_dim", model.embedding_dim))
             if grafit and grafit_bank_size > 0 else None
         )
         self.cross_entropy = cross_entropy

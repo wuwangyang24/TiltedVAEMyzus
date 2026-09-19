@@ -131,7 +131,7 @@ def grafit_loss(embeddings: Tensor, labels: Tensor,
 
     if bank is not None and sample_idx is not None:
         bank.update(sample_idx, embeddings, labels)
-        cand = bank.bank.to(device)
+        cand = bank.bank.to(device=device, dtype=embeddings.dtype)
         cand_labels = bank.bank_labels.to(device)
         denom_mask = bank.filled.to(device).to(embeddings.dtype).expand(n, -1).clone()
         denom_mask.scatter_(1, sample_idx.view(-1, 1).to(device), 0.0)

@@ -122,6 +122,9 @@ class Backbone(nn.Module):
         else:
             self.projection = None
 
+        # Width of what forward() returns: the head is optional.
+        self.output_dim = embedding_dim if self.use_proj_head else feat_dim
+
         # Optional linear classifier for the supervised cross-entropy baseline.
         # It sits on the same (normalized) embedding the contrastive losses use.
         if cross_entropy:
@@ -135,12 +138,11 @@ class Backbone(nn.Module):
         # BYOL-style predictor for Grafit's instance-level term: it sits on the
         # online branch only, which is what breaks the collapse symmetry.
         if grafit_predictor:
-            pred_dim = embedding_dim if self.use_proj_head else feat_dim
             self.grafit_predictor = nn.Sequential(
-                nn.Linear(pred_dim, proj_hidden_dim),
+                nn.Linear(self.output_dim, proj_hidden_dim),
                 nn.BatchNorm1d(proj_hidden_dim),
                 nn.ReLU(inplace=True),
-                nn.Linear(proj_hidden_dim, pred_dim),
+                nn.Linear(proj_hidden_dim, self.output_dim),
             )
         else:
             self.grafit_predictor = None
