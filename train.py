@@ -402,6 +402,22 @@ def parse_args() -> argparse.Namespace:
                              "one embedding per training image (as in the paper) "
                              "instead of the in-batch embeddings. Costs "
                              "batch_size x train_size logits per step.")
+    parser.add_argument("--maskcon", action="store_true",
+                        help="Use the MaskCon loss (Feng & Patras, CVPR 2023): "
+                             "MoCo-style contrastive learning whose soft targets "
+                             "over a momentum-key queue are masked by the coarse "
+                             "labels. Needs multi-view batches (--grafit_views) and "
+                             "adds a momentum encoder (--EMA_momentum).")
+    parser.add_argument("--maskcon_w", type=float, default=1.0,
+                        help="MaskCon mixing weight between the masked soft target "
+                             "and the purely self-supervised one (1.0 = pure "
+                             "MaskCon, 0.0 = MoCo). Default: 1.0")
+    parser.add_argument("--maskcon_soft_tau", type=float, default=0.1,
+                        help="MaskCon soft-label temperature t0 used on the key "
+                             "branch (--temperature is the main t). Default: 0.1")
+    parser.add_argument("--maskcon_queue_size", type=int, default=4096,
+                        help="Size of MaskCon's momentum-key queue. 0 falls back to "
+                             "the in-batch keys. Default: 4096")
     parser.add_argument("--cross_entropy", action="store_true",
                         help="Supervised cross-entropy baseline: train a linear "
                              "classifier on the (normalized) embedding over the "
@@ -558,7 +574,8 @@ def main() -> None:
     # Multi-view batches are only meaningful for the instance-level term.
     supcon_inst = args.supcon_soft_pos_loss and args.supcon_inst
     use_instance_term = args.grafit or supcon_inst
-    grafit_views = args.grafit_views if (use_instance_term or args.taxocon_aug) else 0
+    grafit_views = args.grafit_views if (
+        use_instance_term or args.taxocon_aug or args.maskcon) else 0
     grafit_bank = args.grafit and args.grafit_bank
 
     if is_contrastive:
@@ -758,6 +775,10 @@ def main() -> None:
                 grafit=args.grafit,
                 grafit_lam=args.grafit_lam,
                 grafit_bank_size=grafit_bank_size,
+                maskcon=args.maskcon,
+                maskcon_w=args.maskcon_w,
+                maskcon_soft_temperature=args.maskcon_soft_tau,
+                maskcon_queue_size=args.maskcon_queue_size,
                 infonce_softpos=args.infonce_softpos,
                 supcon_softpos=args.supcon_soft_pos_loss,
                 supcon_inst=supcon_inst,
@@ -885,6 +906,11 @@ def main() -> None:
                 f"_Grafit-Lam{args.grafit_lam}-Views{args.grafit_views}"
                 f"{'-Bank' if args.grafit_bank else ''}"
             ) if args.grafit else ""
+            maskcon_tag = (
+                f"_MaskCon-W{args.maskcon_w}-T0{args.maskcon_soft_tau}"
+                f"-Q{args.maskcon_queue_size}-Views{args.grafit_views}"
+                f"-M{args.EMA_momentum}"
+            ) if args.maskcon else ""
             infonce_softpos_tag = (
                 f"_InfoNCESoftPos-Tau{args.pos_weight_tau}"
                 f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
@@ -921,6 +947,7 @@ def main() -> None:
                 f"{vanilla_supcon_tag}"
                 f"{ms_loss_tag}"
                 f"{grafit_tag}"
+                f"{maskcon_tag}"
                 f"{cross_entropy_tag}"
                 f"{infonce_softpos_tag}"
                 f"{supcon_softpos_tag}"

@@ -9,7 +9,7 @@ from Loss import (
     infonce_loss, contrastive_sigreg_loss, DCLSIGRegLoss, DCLSoftPosLoss,
     sigreg_loss, batch_knn_accuracy, gaussianity_metrics,
     vanilla_dcl_loss, infonce_softpos_loss, SupConSoftPosLoss, TaxoConAugLoss,
-    vanilla_supcon_loss, multi_similarity_loss, grafit_loss,
+    vanilla_supcon_loss, multi_similarity_loss, grafit_loss, maskcon_loss,
 )
 
 try:
@@ -258,6 +258,12 @@ class Backbone(nn.Module):
     ) -> Dict[str, Tensor]:
         kwargs.setdefault("temperature", self.temperature)
         return grafit_loss(embeddings, labels, **kwargs)
+
+    def maskcon_loss_function(
+        self, embeddings: Tensor, labels: Tensor, **kwargs,
+    ) -> Dict[str, Tensor]:
+        kwargs.setdefault("temperature", self.temperature)
+        return maskcon_loss(embeddings, labels, **kwargs)
 
     def infonce_softpos_loss_function(
         self, embeddings: Tensor, labels: Tensor, **kwargs,

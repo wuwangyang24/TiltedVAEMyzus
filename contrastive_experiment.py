@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 
 from Models import DinoV2LoRA
-from Loss import GrafitMemoryBank, multiview_similarity
+from Loss import GrafitMemoryBank, MaskConQueue, multiview_similarity
 
 
 class ContrastiveExperiment(pl.LightningModule):
@@ -53,6 +53,10 @@ class ContrastiveExperiment(pl.LightningModule):
                  grafit: bool = False,
                  grafit_lam: float = 1.0,
                  grafit_bank_size: int = 0,
+                 maskcon: bool = False,
+                 maskcon_w: float = 1.0,
+                 maskcon_soft_temperature: float = 0.1,
+                 maskcon_queue_size: int = 4096,
                  cross_entropy: bool = False,
                  pos_weight_tau: float = 0.1,
                  supcon_soft_pos_tau: float = 0.1,
@@ -101,6 +105,15 @@ class ContrastiveExperiment(pl.LightningModule):
                              getattr(model, "output_dim", model.embedding_dim))
             if grafit and grafit_bank_size > 0 else None
         )
+        self.maskcon = maskcon
+        self.maskcon_w = maskcon_w
+        self.maskcon_soft_temperature = maskcon_soft_temperature
+        # MoCo-style FIFO queue of momentum keys feeding the masked soft labels.
+        self.maskcon_queue = (
+            MaskConQueue(maskcon_queue_size,
+                         getattr(model, "output_dim", model.embedding_dim))
+            if maskcon and maskcon_queue_size > 0 else None
+        )
         self.cross_entropy = cross_entropy
         self.pos_weight_tau = pos_weight_tau
         self.supcon_soft_pos_tau = supcon_soft_pos_tau
@@ -125,8 +138,9 @@ class ContrastiveExperiment(pl.LightningModule):
             raise ValueError("EMA_momentum must be in [0, 1)")
         self.EMA_pos_weight = EMA_pos_weight
         self.EMA_momentum = EMA_momentum
-        # Grafit's instance term needs the EMA target branch f_xi of Eq. 1.
-        if EMA_pos_weight or grafit or supcon_inst:
+        # Grafit's instance term needs the EMA target branch f_xi of Eq. 1;
+        # MaskCon needs the same branch as its momentum key encoder.
+        if EMA_pos_weight or grafit or supcon_inst or maskcon:
             self.ema_model = copy.deepcopy(model)
             for p in self.ema_model.parameters():
                 p.requires_grad_(False)
@@ -184,6 +198,21 @@ class ContrastiveExperiment(pl.LightningModule):
             targets = self.ema_model(flat).view(b, v, -1).transpose(0, 1)
         # The supervised term uses a single augmentation (Grafit appendix B.1).
         return online.view(b, v, -1)[:, 0], predictions, targets
+
+    def _maskcon_views(self, images: torch.Tensor):
+        """Encode a batch into MaskCon's query / momentum-key pair: the online
+        embedding of view 0 and the EMA encoder's embedding of view 1. Single-view
+        batches reuse view 0 for the key, so the explicit positive collapses onto
+        the query itself (only meaningful at validation time)."""
+        if images.ndim != 5:
+            q = self.model(images)
+            with torch.no_grad():
+                k = self.ema_model(images)
+            return q, k
+        q = self.model(images[:, 0])
+        with torch.no_grad():
+            k = self.ema_model(images[:, 1 if images.size(1) > 1 else 0])
+        return q, k
 
     def _multi_views(self, images: torch.Tensor):
         """Encode a (B, V, C, H, W) batch into the view-0 embedding plus the
@@ -275,6 +304,16 @@ class ContrastiveExperiment(pl.LightningModule):
                 temperature=self.temperature,
                 predictions=predictions, targets=targets,
                 bank=self.grafit_bank, sample_idx=sample_idx)
+        elif self.maskcon:
+            # Train batches are (B, V, C, H, W): view 0 is the query, view 1 the
+            # momentum key generating the coarse-masked soft labels.
+            embeddings, keys = self._maskcon_views(images)
+            loss_dict = self.model.maskcon_loss_function(
+                embeddings, labels, keys=keys,
+                temperature=self.temperature,
+                soft_temperature=self.maskcon_soft_temperature,
+                w=self.maskcon_w, queue=self.maskcon_queue,
+                update_queue=self.training)
         elif self.infonce_softpos:
             embeddings = self.model(images)
             loss_dict = self.model.infonce_softpos_loss_function(
