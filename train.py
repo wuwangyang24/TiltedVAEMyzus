@@ -548,6 +548,13 @@ def main() -> None:
     is_backbone = args.model == "backbone"
     is_contrastive = is_dino or is_backbone
 
+    if args.taxocon_aug and args.supcon_soft_pos_loss:
+        raise ValueError(
+            "--taxocon_aug and --supcon_soft_pos_loss are mutually exclusive: "
+            "TaxoCon-Aug is the multi-view variant of the SupCon soft-positive "
+            "loss. Pass only --taxocon_aug (it reuses --supcon_soft_pos_tau)."
+        )
+
     # Multi-view batches are only meaningful for the instance-level term.
     supcon_inst = args.supcon_soft_pos_loss and args.supcon_inst
     use_instance_term = args.grafit or supcon_inst
