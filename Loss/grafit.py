@@ -89,8 +89,12 @@ def _knn_accuracy(logits: Tensor, labels: Tensor, cand_labels: Tensor,
     return result
 
 
-def _instance_loss(predictions: Tensor, targets: Tensor) -> Tensor:
-    """BYOL-style cosine loss between every ordered pair of distinct views."""
+def byol_instance_loss(predictions: Tensor, targets: Tensor) -> Tensor:
+    """BYOL-style cosine loss between every ordered pair of distinct views.
+
+    ``- sum_{i != j} cos(q(g(t_i(x))), g_xi(t_j(x))) / (T (T - 1))`` over the
+    ``(T, N, D)`` normalized predictor outputs and EMA-target embeddings.
+    """
     v = predictions.size(0)
     sim = torch.einsum("ind,jnd->ijn", predictions, targets)      # (V, V, N)
     off_diag = 1.0 - torch.eye(v, device=sim.device, dtype=sim.dtype)
@@ -148,7 +152,7 @@ def grafit_loss(embeddings: Tensor, labels: Tensor,
     knn_loss, knn_valid = _softmax_term(logits, pos_mask, denom_mask)
 
     if predictions is not None and targets is not None and predictions.size(0) > 1:
-        inst_loss = _instance_loss(predictions, targets)
+        inst_loss = byol_instance_loss(predictions, targets)
     else:
         inst_loss = torch.zeros((), device=device, dtype=embeddings.dtype)
 

@@ -41,6 +41,8 @@ class ContrastiveExperiment(pl.LightningModule):
                  vanilla_dcl: bool = False,
                  infonce_softpos: bool = False,
                  supcon_softpos: bool = False,
+                 supcon_inst: bool = False,
+                 supcon_inst_weight: float = 1.0,
                  vanilla_supcon: bool = False,
                  ms_loss: bool = False,
                  ms_thresh: float = 0.5,
@@ -81,6 +83,8 @@ class ContrastiveExperiment(pl.LightningModule):
         self.vanilla_dcl = vanilla_dcl
         self.infonce_softpos = infonce_softpos
         self.supcon_softpos = supcon_softpos
+        self.supcon_inst = supcon_inst
+        self.supcon_inst_weight = supcon_inst_weight
         self.vanilla_supcon = vanilla_supcon
         self.ms_loss = ms_loss
         self.ms_thresh = ms_thresh
@@ -120,7 +124,7 @@ class ContrastiveExperiment(pl.LightningModule):
         self.EMA_pos_weight = EMA_pos_weight
         self.EMA_momentum = EMA_momentum
         # Grafit's instance term needs the EMA target branch f_xi of Eq. 1.
-        if EMA_pos_weight or grafit:
+        if EMA_pos_weight or grafit or supcon_inst:
             self.ema_model = copy.deepcopy(model)
             for p in self.ema_model.parameters():
                 p.requires_grad_(False)
@@ -152,8 +156,25 @@ class ContrastiveExperiment(pl.LightningModule):
         or the current epoch still uses uniform positive weights."""
         if not self.EMA_pos_weight or not self._use_pos_weighting():
             return None
+        if images.ndim == 5:
+            images = images[:, 0]
         ema_emb = self.ema_model(images)  # normalized embeddings
         return ema_emb @ ema_emb.t()
+
+    def _byol_views(self, images: torch.Tensor):
+        """Encode a (B, V, C, H, W) batch into the online embedding of view 0
+        plus the predictor / EMA-target view stacks driving the instance term.
+        Single-view (B, C, H, W) batches get no instance term."""
+        if images.ndim != 5:
+            return self.model(images), None, None
+        b, v = images.shape[:2]
+        flat = images.flatten(0, 1)
+        online = self.model(flat)
+        predictions = self.model.grafit_predict(online).view(b, v, -1).transpose(0, 1)
+        with torch.no_grad():
+            targets = self.ema_model(flat).view(b, v, -1).transpose(0, 1)
+        # The supervised term uses a single augmentation (Grafit appendix B.1).
+        return online.view(b, v, -1)[:, 0], predictions, targets
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -228,19 +249,7 @@ class ContrastiveExperiment(pl.LightningModule):
         elif self.grafit:
             # Multi-view train batches are (B, V, C, H, W); val stays
             # (B, C, H, W), where only the coarse kNN term is defined.
-            if images.ndim == 5:
-                b, v = images.shape[:2]
-                flat = images.flatten(0, 1)
-                online = self.model(flat)
-                predictions = self.model.grafit_predict(online)
-                predictions = predictions.view(b, v, -1).transpose(0, 1)
-                with torch.no_grad():
-                    targets = self.ema_model(flat).view(b, v, -1).transpose(0, 1)
-                # The supervised term uses a single augmentation (paper B.1).
-                embeddings = online.view(b, v, -1)[:, 0]
-            else:
-                embeddings = self.model(images)
-                predictions = targets = None
+            embeddings, predictions, targets = self._byol_views(images)
             loss_dict = self.model.grafit_loss_function(
                 embeddings, labels, lam=self.grafit_lam,
                 temperature=self.temperature,
@@ -257,13 +266,18 @@ class ContrastiveExperiment(pl.LightningModule):
                 pos_weight_sim=self._ema_pos_weight_sim(images),
                 test_labels=loss_test_labels)
         elif self.supcon_softpos:
-            embeddings = self.model(images)
+            if self.supcon_inst:
+                embeddings, predictions, targets = self._byol_views(images)
+            else:
+                embeddings, predictions, targets = self.model(images), None, None
             supcon_tau = self._current_supcon_tau()
             loss_dict = self.model.supcon_soft_pos_loss_function(
                 embeddings, labels, temperature=self.temperature,
                 pos_weight_tau=supcon_tau,
                 use_pos_weighting=self._use_pos_weighting(),
                 pos_weight_sim=self._ema_pos_weight_sim(images),
+                predictions=predictions, targets=targets,
+                inst_weight=self.supcon_inst_weight,
                 test_labels=loss_test_labels)
         elif self.cross_entropy:
             # Supervised cross-entropy baseline: a linear classifier on the same

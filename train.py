@@ -337,6 +337,13 @@ def parse_args() -> argparse.Namespace:
                         help="Temperature for the positive-pair softmax weighting in "
                              "--supcon_soft_pos_loss (lower = more weight on closest "
                              "positives). Default: 0.1")
+    parser.add_argument("--supcon_inst", action="store_true",
+                        help="Add Grafit's BYOL-style instance-level term to "
+                             "--supcon_soft_pos_loss. Needs multi-view batches "
+                             "(--grafit_views) and adds an EMA target network.")
+    parser.add_argument("--supcon_inst_weight", type=float, default=1.0,
+                        help="Weight of the instance term in "
+                             "L_supcon + w * L_inst. Default: 1.0")
     parser.add_argument("--denominator_pos_weight", action="store_true",
                         help="With --supcon_soft_pos_loss, also re-weight the positive "
                              "terms inside the SupCon denominator by the soft positive "
@@ -535,8 +542,10 @@ def main() -> None:
     is_backbone = args.model == "backbone"
     is_contrastive = is_dino or is_backbone
 
-    # Multi-view batches are only meaningful for Grafit's instance-level term.
-    grafit_views = args.grafit_views if args.grafit else 0
+    # Multi-view batches are only meaningful for the instance-level term.
+    supcon_inst = args.supcon_soft_pos_loss and args.supcon_inst
+    use_instance_term = args.grafit or supcon_inst
+    grafit_views = args.grafit_views if use_instance_term else 0
     grafit_bank = args.grafit and args.grafit_bank
 
     if is_contrastive:
@@ -664,7 +673,7 @@ def main() -> None:
                 grad_checkpointing=args.grad_checkpointing,
                 num_classes=num_classes,
                 cross_entropy=args.cross_entropy,
-                grafit_predictor=args.grafit,
+                grafit_predictor=use_instance_term,
             )
         else:
             model = DinoV2LoRA(
@@ -693,7 +702,7 @@ def main() -> None:
                 grad_checkpointing=args.grad_checkpointing,
                 num_classes=num_classes,
                 cross_entropy=args.cross_entropy,
-                grafit_predictor=args.grafit,
+                grafit_predictor=use_instance_term,
             )
 
         if args.ssl_lejepa:
@@ -736,6 +745,8 @@ def main() -> None:
                 grafit_bank_size=grafit_bank_size,
                 infonce_softpos=args.infonce_softpos,
                 supcon_softpos=args.supcon_soft_pos_loss,
+                supcon_inst=supcon_inst,
+                supcon_inst_weight=args.supcon_inst_weight,
                 cross_entropy=args.cross_entropy,
                 supcon_soft_pos_tau=args.supcon_soft_pos_tau,
                 denom_pos_weight=args.denominator_pos_weight,
@@ -870,6 +881,7 @@ def main() -> None:
                 f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
                 f"{'-DenomPosW' if args.denominator_pos_weight else ''}"
                 f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
+                f"{'-Inst' + str(args.supcon_inst_weight) + 'Views' + str(args.grafit_views) if args.supcon_inst else ''}"
                 f"{ema_pw_tag}"
             ) if args.supcon_soft_pos_loss else ""
             ckpt_suffix = (

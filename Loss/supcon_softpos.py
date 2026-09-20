@@ -8,6 +8,7 @@ from torch.nn import functional as F
 
 from .utils import batch_knn_accuracy, gaussianity_metrics
 from .dcl_soft_pos import sinkhorn_normalize
+from .grafit import byol_instance_loss
 
 _SMALL_NUM = np.log(1e-45)
 
@@ -23,6 +24,10 @@ class SupConSoftPosLoss(nn.Module):
 
     Unlike DCL, the SupCon denominator stays *coupled* — it includes both
     positives and negatives (all non-self samples).
+
+    Grafit's instance-level term can be added on top by passing ``predictions``
+    and ``targets``: it keeps the fine-grained information the (coarse) labels
+    cannot express, at the cost of multi-view batches and an EMA target network.
 
     Args:
         pos_weight_tau: temperature for the softmax that turns positive-pair
@@ -50,6 +55,9 @@ class SupConSoftPosLoss(nn.Module):
                 denom_pos_weight: Optional[bool] = None,
                 pos_weight_sim: Optional[Tensor] = None,
                 test_labels: Optional[Tensor] = None,
+                predictions: Optional[Tensor] = None,
+                targets: Optional[Tensor] = None,
+                inst_weight: float = 1.0,
                 **kwargs) -> Dict[str, Tensor]:
         temperature = kwargs.get("temperature", temperature)
         pos_weight_tau = self.pos_weight_tau if pos_weight_tau is None else pos_weight_tau
@@ -109,12 +117,20 @@ class SupConSoftPosLoss(nn.Module):
 
         loss = supcon_loss
 
+        # Grafit's instance term (BYOL-style, no negatives) over the views.
+        if predictions is not None and targets is not None and predictions.size(0) > 1:
+            inst_loss = byol_instance_loss(predictions, targets)
+            loss = loss + inst_weight * inst_loss
+        else:
+            inst_loss = torch.zeros((), device=device, dtype=embeddings.dtype)
+
         with torch.no_grad():
             knn_accs = batch_knn_accuracy(logits, labels_col, self_mask)
             pw_ent = -(pos_weights * (pos_weights + 1e-12).log()).sum(dim=1)
             pw_ent = pw_ent[valid].mean() if valid.any() else torch.zeros((), device=device)
             metrics = {
                 "supcon_loss": supcon_loss.detach(),
+                "supcon_instance": inst_loss.detach(),
                 "pos_weight_entropy": pw_ent,
                 "pos_fraction": valid.float().mean(),
                 "emb_std": embeddings.std(dim=0).mean(),
