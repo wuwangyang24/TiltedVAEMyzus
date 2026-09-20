@@ -8,7 +8,7 @@ from torch.nn import functional as F
 from Loss import (
     infonce_loss, contrastive_sigreg_loss, DCLSIGRegLoss, DCLSoftPosLoss,
     sigreg_loss, batch_knn_accuracy, gaussianity_metrics,
-    vanilla_dcl_loss, infonce_softpos_loss, SupConSoftPosLoss,
+    vanilla_dcl_loss, infonce_softpos_loss, SupConSoftPosLoss, TaxoConAugLoss,
     vanilla_supcon_loss, multi_similarity_loss, grafit_loss,
 )
 
@@ -71,6 +71,7 @@ class Backbone(nn.Module):
                  supcon_soft_pos: bool = False,
                  supcon_soft_pos_tau: float = 0.1,
                  supcon_denom_pos_weight: bool = False,
+                 taxocon_aug: bool = False,
                  sinkhorn: bool = False,
                  sinkhorn_iters: int = 5,
                  grad_checkpointing: bool = False,
@@ -169,6 +170,13 @@ class Backbone(nn.Module):
             denom_pos_weight=supcon_denom_pos_weight,
         ) if supcon_soft_pos else None
 
+        self.taxocon_aug_loss = TaxoConAugLoss(
+            pos_weight_tau=supcon_soft_pos_tau,
+            sinkhorn=sinkhorn,
+            sinkhorn_iters=sinkhorn_iters,
+            denom_pos_weight=supcon_denom_pos_weight,
+        ) if taxocon_aug else None
+
     def trainable_parameters(self) -> List[nn.Parameter]:
         """Return all trainable (backbone + projection head) parameters."""
         return [p for p in self.parameters() if p.requires_grad]
@@ -214,6 +222,12 @@ class Backbone(nn.Module):
     ) -> Dict[str, Tensor]:
         kwargs.setdefault("temperature", self.temperature)
         return self.supcon_soft_pos_loss(embeddings, labels, **kwargs)
+
+    def taxocon_aug_loss_function(
+        self, embeddings: Tensor, labels: Tensor, **kwargs,
+    ) -> Dict[str, Tensor]:
+        kwargs.setdefault("temperature", self.temperature)
+        return self.taxocon_aug_loss(embeddings, labels, **kwargs)
 
     def vanilla_dcl_loss_function(
         self, embeddings: Tensor, labels: Tensor, **kwargs,

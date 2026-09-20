@@ -4,6 +4,7 @@ from .contrastive_sigreg import contrastive_sigreg_loss
 from .dcl_sigreg import DCLSIGRegLoss
 from .dcl_soft_pos import DCLSoftPosLoss
 from .supcon_softpos import SupConSoftPosLoss
+from .taxocon_aug import TaxoConAugLoss, multiview_similarity
 from .vanilla_dcl import vanilla_dcl_loss
 from .vanilla_supcon import vanilla_supcon_loss
 from .ms_loss import multi_similarity_loss
@@ -18,6 +19,8 @@ __all__ = [
     "DCLSIGRegLoss",
     "DCLSoftPosLoss",
     "SupConSoftPosLoss",
+    "TaxoConAugLoss",
+    "multiview_similarity",
     "vanilla_dcl_loss",
     "vanilla_supcon_loss",
     "multi_similarity_loss",

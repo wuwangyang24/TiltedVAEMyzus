@@ -43,6 +43,7 @@ class ContrastiveExperiment(pl.LightningModule):
                  supcon_softpos: bool = False,
                  supcon_inst: bool = False,
                  supcon_inst_weight: float = 1.0,
+                 taxocon_aug: bool = False,
                  vanilla_supcon: bool = False,
                  ms_loss: bool = False,
                  ms_thresh: float = 0.5,
@@ -85,6 +86,7 @@ class ContrastiveExperiment(pl.LightningModule):
         self.supcon_softpos = supcon_softpos
         self.supcon_inst = supcon_inst
         self.supcon_inst_weight = supcon_inst_weight
+        self.taxocon_aug = taxocon_aug
         self.vanilla_supcon = vanilla_supcon
         self.ms_loss = ms_loss
         self.ms_thresh = ms_thresh
@@ -175,6 +177,17 @@ class ContrastiveExperiment(pl.LightningModule):
             targets = self.ema_model(flat).view(b, v, -1).transpose(0, 1)
         # The supervised term uses a single augmentation (Grafit appendix B.1).
         return online.view(b, v, -1)[:, 0], predictions, targets
+
+    def _multi_views(self, images: torch.Tensor):
+        """Encode a (B, V, C, H, W) batch into the view-0 embedding plus the
+        full (B, V, D) view stack used for the augmentation-averaged positive
+        similarities. Single-view batches yield a V=1 stack."""
+        if images.ndim != 5:
+            embeddings = self.model(images)
+            return embeddings, embeddings.unsqueeze(1)
+        b, v = images.shape[:2]
+        view_embeddings = self.model(images.flatten(0, 1)).view(b, v, -1)
+        return view_embeddings[:, 0], view_embeddings
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -279,6 +292,17 @@ class ContrastiveExperiment(pl.LightningModule):
                 predictions=predictions, targets=targets,
                 inst_weight=self.supcon_inst_weight,
                 test_labels=loss_test_labels)
+        elif self.taxocon_aug:
+            # Train batches are (B, V, C, H, W): the extra views only feed the
+            # positive-weight similarities, the SupCon term stays on view 0.
+            embeddings, view_embeddings = self._multi_views(images)
+            loss_dict = self.model.taxocon_aug_loss_function(
+                embeddings, labels, temperature=self.temperature,
+                pos_weight_tau=self._current_supcon_tau(),
+                use_pos_weighting=self._use_pos_weighting(),
+                view_embeddings=view_embeddings,
+                pos_weight_sim=self._ema_pos_weight_sim(images),
+                test_labels=loss_test_labels)
         elif self.cross_entropy:
             # Supervised cross-entropy baseline: a linear classifier on the same
             # normalized embedding the contrastive losses operate on.
@@ -293,10 +317,10 @@ class ContrastiveExperiment(pl.LightningModule):
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         loss_dict, _, _, _ = self._step(batch)
-        if self.supcon_softpos:
+        if self.supcon_softpos or self.taxocon_aug:
             self.log("train_supcon_tau", self._current_supcon_tau(),
                      on_step=False, on_epoch=True)
-        if self.supcon_softpos or self.infonce_softpos:
+        if self.supcon_softpos or self.infonce_softpos or self.taxocon_aug:
             self.log("train_pos_weight_active", float(self._use_pos_weighting()),
                      on_step=False, on_epoch=True)
         self.log(

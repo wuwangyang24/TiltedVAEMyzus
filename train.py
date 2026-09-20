@@ -344,6 +344,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--supcon_inst_weight", type=float, default=1.0,
                         help="Weight of the instance term in "
                              "L_supcon + w * L_inst. Default: 1.0")
+    parser.add_argument("--taxocon_aug", action="store_true",
+                        help="Use TaxoCon-Aug: the SupCon soft-positive loss whose "
+                             "positive-pair weights come from the similarity averaged "
+                             "over augmented views (--grafit_views) instead of a "
+                             "single view. Shares --supcon_soft_pos_tau, "
+                             "--tau_annealing and --denominator_pos_weight.")
     parser.add_argument("--denominator_pos_weight", action="store_true",
                         help="With --supcon_soft_pos_loss, also re-weight the positive "
                              "terms inside the SupCon denominator by the soft positive "
@@ -545,7 +551,7 @@ def main() -> None:
     # Multi-view batches are only meaningful for the instance-level term.
     supcon_inst = args.supcon_soft_pos_loss and args.supcon_inst
     use_instance_term = args.grafit or supcon_inst
-    grafit_views = args.grafit_views if use_instance_term else 0
+    grafit_views = args.grafit_views if (use_instance_term or args.taxocon_aug) else 0
     grafit_bank = args.grafit and args.grafit_bank
 
     if is_contrastive:
@@ -668,6 +674,7 @@ def main() -> None:
                 supcon_soft_pos=args.supcon_soft_pos_loss,
                 supcon_soft_pos_tau=args.supcon_soft_pos_tau,
                 supcon_denom_pos_weight=args.denominator_pos_weight,
+                taxocon_aug=args.taxocon_aug,
                 sinkhorn=args.sinkhorn,
                 sinkhorn_iters=args.sinkhorn_iters,
                 grad_checkpointing=args.grad_checkpointing,
@@ -697,6 +704,7 @@ def main() -> None:
                 supcon_soft_pos=args.supcon_soft_pos_loss,
                 supcon_soft_pos_tau=args.supcon_soft_pos_tau,
                 supcon_denom_pos_weight=args.denominator_pos_weight,
+                taxocon_aug=args.taxocon_aug,
                 sinkhorn=args.sinkhorn,
                 sinkhorn_iters=args.sinkhorn_iters,
                 grad_checkpointing=args.grad_checkpointing,
@@ -747,6 +755,7 @@ def main() -> None:
                 supcon_softpos=args.supcon_soft_pos_loss,
                 supcon_inst=supcon_inst,
                 supcon_inst_weight=args.supcon_inst_weight,
+                taxocon_aug=args.taxocon_aug,
                 cross_entropy=args.cross_entropy,
                 supcon_soft_pos_tau=args.supcon_soft_pos_tau,
                 denom_pos_weight=args.denominator_pos_weight,
@@ -884,6 +893,14 @@ def main() -> None:
                 f"{'-Inst' + str(args.supcon_inst_weight) + 'Views' + str(args.grafit_views) if args.supcon_inst else ''}"
                 f"{ema_pw_tag}"
             ) if args.supcon_soft_pos_loss else ""
+            taxocon_aug_tag = (
+                f"_TaxoConAug-{'LinearTau' + str(args.supcon_tau_start) + 'to' + str(args.supcon_tau_end) if args.tau_annealing else 'Tau' + str(args.supcon_soft_pos_tau)}"
+                f"-Views{args.grafit_views}"
+                f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
+                f"{'-DenomPosW' if args.denominator_pos_weight else ''}"
+                f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
+                f"{ema_pw_tag}"
+            ) if args.taxocon_aug else ""
             ckpt_suffix = (
                 f"{model_prefix}"
                 f"_P{p_val}_K{k_val}_BS{args.batch_size}"
@@ -900,6 +917,7 @@ def main() -> None:
                 f"{cross_entropy_tag}"
                 f"{infonce_softpos_tag}"
                 f"{supcon_softpos_tag}"
+                f"{taxocon_aug_tag}"
                 f"{dataset_tag}"
             )
     else:
@@ -958,6 +976,11 @@ def main() -> None:
         # The active soft-positive loss determines which temperature governs the
         # positive-pair weighting.
         if args.supcon_soft_pos_loss:
+            pos_weight_tau = (
+                f"{args.supcon_tau_start}->{args.supcon_tau_end}"
+                if args.tau_annealing else args.supcon_soft_pos_tau
+            )
+        elif args.taxocon_aug:
             pos_weight_tau = (
                 f"{args.supcon_tau_start}->{args.supcon_tau_end}"
                 if args.tau_annealing else args.supcon_soft_pos_tau
