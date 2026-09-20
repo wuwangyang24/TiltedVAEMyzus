@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 
 from Models import DinoV2LoRA
-from Loss import GrafitMemoryBank
+from Loss import GrafitMemoryBank, multiview_similarity
 
 
 class ContrastiveExperiment(pl.LightningModule):
@@ -152,13 +152,20 @@ class ContrastiveExperiment(pl.LightningModule):
             ema_b.copy_(b)
 
     @torch.no_grad()
-    def _ema_pos_weight_sim(self, images: torch.Tensor) -> Optional[torch.Tensor]:
+    def _ema_pos_weight_sim(self, images: torch.Tensor,
+                            multiview: bool = False) -> Optional[torch.Tensor]:
         """Cosine-similarity matrix from the EMA teacher's embeddings, used to
         drive the soft-positive weights. Returns None when EMA weighting is off
-        or the current epoch still uses uniform positive weights."""
+        or the current epoch still uses uniform positive weights. With
+        ``multiview`` the similarity is averaged over all view pairs instead of
+        being taken from view 0 alone."""
         if not self.EMA_pos_weight or not self._use_pos_weighting():
             return None
         if images.ndim == 5:
+            if multiview:
+                b, v = images.shape[:2]
+                ema_views = self.ema_model(images.flatten(0, 1)).view(b, v, -1)
+                return multiview_similarity(ema_views)
             images = images[:, 0]
         ema_emb = self.ema_model(images)  # normalized embeddings
         return ema_emb @ ema_emb.t()
@@ -301,7 +308,7 @@ class ContrastiveExperiment(pl.LightningModule):
                 pos_weight_tau=self._current_supcon_tau(),
                 use_pos_weighting=self._use_pos_weighting(),
                 view_embeddings=view_embeddings,
-                pos_weight_sim=self._ema_pos_weight_sim(images),
+                pos_weight_sim=self._ema_pos_weight_sim(images, multiview=True),
                 test_labels=loss_test_labels)
         elif self.cross_entropy:
             # Supervised cross-entropy baseline: a linear classifier on the same
