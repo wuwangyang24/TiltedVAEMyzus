@@ -6,8 +6,7 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn import functional as F
 
-from .utils import batch_knn_accuracy, gaussianity_metrics
-from .dcl_soft_pos import sinkhorn_normalize
+from .utils import batch_knn_accuracy, gaussianity_metrics, sinkhorn_normalize
 from .grafit import byol_instance_loss
 
 _SMALL_NUM = np.log(1e-45)
@@ -18,11 +17,11 @@ class SupConSoftPosLoss(nn.Module):
 
     Standard SupCon averages each anchor's positive-pair log-probabilities
     uniformly.  This variant re-weights positive pairs via a softmax over their
-    cosine similarities (the exact scheme used by :class:`DCLSoftPosLoss`):
-    pairs that are already close receive larger weight, while dissimilar
-    positives are down-weighted, encouraging tighter within-class sub-clusters.
+    cosine similarities: pairs that are already close receive larger weight,
+    while dissimilar positives are down-weighted, encouraging tighter
+    within-class sub-clusters.
 
-    Unlike DCL, the SupCon denominator stays *coupled* — it includes both
+    The SupCon denominator stays *coupled* — it includes both
     positives and negatives (all non-self samples).
 
     Grafit's instance-level term can be added on top by passing ``predictions``
@@ -80,7 +79,7 @@ class SupConSoftPosLoss(nn.Module):
         logits = normed @ normed.t() / temperature
         logits = logits - logits.max(dim=1, keepdim=True).values.detach()
 
-        # --- Soft positive weights (same scheme as DCLSoftPos) ---
+        # --- Soft positive weights ---
         # When ``pos_weight_sim`` is supplied (e.g. cosine similarities from an
         # EMA "teacher" copy of the model), it drives the positive weights
         # instead of the online embeddings' own similarities.

@@ -235,28 +235,10 @@ def _clean_state_dict(state_dict: dict) -> dict:
             for k, v in state_dict.items()}
 
 
-def _resize_dcl_buffers(model: torch.nn.Module, cleaned: dict) -> None:
-    """Match DCL memory-bank buffer shapes to the checkpoint before loading."""
-    for key in ("dcl_sigreg_loss.class_means", "dcl_sigreg_loss.initialized"):
-        if key not in cleaned:
-            continue
-        parts = key.split(".")
-        parent = model
-        ok = True
-        for attr in parts[:-1]:
-            parent = getattr(parent, attr, None)
-            if parent is None:
-                ok = False
-                break
-        if ok and getattr(parent, parts[-1]).shape != cleaned[key].shape:
-            parent.register_buffer(parts[-1], torch.empty_like(cleaned[key]))
-
-
 def _load_checkpoint(model: torch.nn.Module, ckpt_path: str) -> None:
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     sd = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
     cleaned = _clean_state_dict(sd)
-    _resize_dcl_buffers(model, cleaned)
     model.load_state_dict(cleaned, strict=False)
 
 

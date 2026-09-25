@@ -151,7 +151,7 @@ from Models import VAE, TiltedVAE, Backbone
 from dataset import (VAEDataModule, ContrastiveDataModule, InatDataModule,
                      FGVCAircraftDataModule)
 from experiment import VAEExperiment
-from contrastive_experiment import ContrastiveExperiment, LeJEPAExperiment
+from contrastive_experiment import ContrastiveExperiment
 
 # Use file-system based tensor sharing to avoid /dev/shm exhaustion, which
 # otherwise hangs DataLoader workers in containers with a small shared-memory
@@ -240,7 +240,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--proj_hidden_dim", type=int, default=2048,
                         help="Hidden width of the 2-layer projection MLP")
     parser.add_argument("--temperature", type=float, default=0.1,
-                        help="Softmax temperature for the InfoNCE/SupCon loss")
+                        help="Softmax temperature for the SupCon loss")
     parser.add_argument("--use_proj_head", action="store_true",
                         help="Use the projection head on top of the backbone features. "
                              "If not set, the backbone features are directly L2-normalized.")
@@ -286,39 +286,11 @@ def parse_args() -> argparse.Namespace:
                              "instead of the synthesis-program level: each compound "
                              "becomes its own class, so positives are images of the "
                              "same compound (across plates/replicates).")
-    parser.add_argument("--contrastive_sigreg_loss", action="store_true",
-                        help="Replace negatives in the contrastive loss with SIGReg "
-                             "regularization for collapse prevention.")
-    parser.add_argument("--dcl_sigreg_loss", action="store_true",
-                        help="Use Decoupled Contrastive Loss with SIGReg: "
-                             "loss = pos + lambda*neg + (1-lambda)*SIGReg.")
-    parser.add_argument("--dcl_ema_momentum", type=float, default=0.9,
-                        help="EMA momentum for the DCL-SIGReg class-mean memory bank. "
-                             "Default: 0.9")
-    parser.add_argument("--dcl_suspicion_tau", type=float, default=0.1,
-                        help="Temperature of the DCL-SIGReg suspicion sigmoid. "
-                             "Default: 0.1")
-    parser.add_argument("--dcl_suspicion_bias", type=float, default=0.5,
-                        help="Similarity threshold (bias) of the DCL-SIGReg suspicion "
-                             "sigmoid. Default: 0.5")
-    parser.add_argument("--dcl_suspicion_standardize", action="store_true",
-                        help="Z-score the class-mean similarities over the batch's "
-                             "negatives before the suspicion sigmoid (avoids "
-                             "saturation; --dcl_suspicion_bias is then in std units, "
-                             "try ~0 with --dcl_suspicion_tau ~1).")
-    parser.add_argument("--normal_dcl", action="store_true",
-                        help="With--dcl_sigreg_loss, use plain DCL+SIGReg: all "
-                             "negatives weighted equally (no suspicion memory bank) "
-                             "and SIGReg applied to the batch embeddings.")
-    parser.add_argument("--dcl_soft_pos_loss", action="store_true",
-                        help="Use DCL with similarity-weighted positives: positive "
-                             "pairs that are more similar get larger weight, forming "
-                             "tighter sub-clusters. Negatives are plain DCL.")
     parser.add_argument("--supcon_soft_pos_loss", action="store_true",
                         help="Use supervised contrastive (SupCon) loss with "
-                             "similarity-weighted positives (same soft-positive "
-                             "scheme as --dcl_soft_pos_loss, but with the coupled "
-                             "SupCon denominator plus SIGReg regularization).")
+                             "similarity-weighted positives: positive pairs that are "
+                             "more similar get larger weight, forming tighter "
+                             "sub-clusters.")
     parser.add_argument("--supcon_soft_pos_tau", type=float, default=0.1,
                         help="Temperature for the positive-pair softmax weighting in "
                              "--supcon_soft_pos_loss (lower = more weight on closest "
@@ -351,16 +323,13 @@ def parse_args() -> argparse.Namespace:
                              "--tau_annealing is enabled. Default: 0.1")
     parser.add_argument("--no_pos_weight_epoch", type=int, default=0,
                         help="Number of initial epochs that use uniform positive "
-                            "weights before SupCon/InfoNCE soft-positive weighting "
+                            "weights before SupCon soft-positive weighting "
                             "starts. "
                              "Default: 0")
-    parser.add_argument("--vanilla_dcl", action="store_true",
-                        help="Use the plain Decoupled Contrastive Loss (no SIGReg, no "
-                             "suspicion re-weighting): supervised single-view DCL.")
     parser.add_argument("--vanilla_supcon", action="store_true",
                         help="Use the plain Supervised Contrastive (SupCon) loss (no "
-                             "SIGReg, no soft positives): supervised single-view "
-                             "SupCon with the coupled InfoNCE denominator.")
+                             "soft positives): supervised single-view "
+                             "SupCon with the coupled denominator.")
     parser.add_argument("--ms_loss", action="store_true",
                         help="Use the Multi-Similarity loss (Wang et al., CVPR 2019) "
                              "with pair mining, as in the official MS-Loss repo.")
@@ -436,63 +405,21 @@ def parse_args() -> argparse.Namespace:
                              "classifier on the (normalized) embedding over the "
                              "train-label classes. Discarded at eval; kNN / "
                              "linear-probe still run on the embeddings.")
-    parser.add_argument("--infonce_softpos", action="store_true",
-                        help="Use InfoNCE/SupCon with similarity-weighted positives "
-                             "(same soft-positive scheme as --dcl_soft_pos_loss, but "
-                             "with the coupled InfoNCE denominator and no SIGReg).")
-    parser.add_argument("--pos_weight_tau", type=float, default=0.1,
-                        help="Temperature for the positive-pair softmax weighting in "
-                             "--infonce_softpos (lower = more weight on closest "
-                             "positives). Default: 0.1")
-    parser.add_argument("--dcl_soft_pos_tau", type=float, default=0.1,
-                        help="Temperature for the positive-pair softmax weighting. "
-                             "Lower values concentrate weight on closest positives. "
-                             "Default: 0.1")
     parser.add_argument("--sinkhorn", action="store_true",
                         help="Use Sinkhorn-Knopp iterations to produce a doubly-stochastic "
                              "positive weight matrix instead of row-wise softmax. "
-                             "Only used with --dcl_soft_pos_loss.")
+                             "Only used with the soft-positive losses.")
     parser.add_argument("--sinkhorn_iters", type=int, default=5,
                         help="Number of Sinkhorn-Knopp iterations. Default: 5")
     parser.add_argument("--EMA_pos_weight", action="store_true",
                         help="Compute the soft-positive weights from an EMA "
                              "(momentum-updated) teacher copy of the model instead "
-                             "of the online embeddings. Used with --supcon_soft_pos_loss, "
-                             "--infonce_softpos or --dcl_soft_pos_loss.")
+                             "of the online embeddings. Used with "
+                             "--supcon_soft_pos_loss or --taxocon_aug.")
     parser.add_argument("--EMA_momentum", type=float, default=0.999,
                         help="Momentum for the EMA teacher weight update when "
                              "--EMA_pos_weight is set (ema = m*ema + (1-m)*online). "
                              "Default: 0.999")
-
-    # LeJEPA self-supervised training (only used when --model backbone)
-    parser.add_argument("--ssl_lejepa", action="store_true",
-                        help="Train the backbone model with the label-free LeJEPA "
-                             "self-supervised objective (multi-view prediction + SIGReg) "
-                             "instead of supervised contrastive learning.")
-    parser.add_argument("--ssl_views", type=int, default=2,
-                        help="Number of augmented views per image for LeJEPA. Default: 2")
-    parser.add_argument("--ssl_rotation", type=float, default=30.0,
-                        help="Max random rotation (degrees) for LeJEPA augmentations.")
-    parser.add_argument("--ssl_translate", type=float, default=0.1,
-                        help="Max random translation (fraction of image size) for "
-                             "LeJEPA augmentations.")
-    parser.add_argument("--ssl_min_scale", type=float, default=0.5,
-                        help="Min RandomResizedCrop scale for LeJEPA views (crop covers "
-                             "[min_scale, 1.0] of the image area). Default: 0.5")
-    parser.add_argument("--ssl_gaussian_blur", type=float, default=0.5,
-                        help="Probability of applying Gaussian blur to each LeJEPA view. "
-                             "0 disables blur. Default: 0.5")
-    parser.add_argument("--ssl_compound_views", action="store_true",
-                        help="Use different images from the same compound as views "
-                             "instead of augmenting a single image multiple times. "
-                             "Only used with --ssl_lejepa.")
-    parser.add_argument("--sigreg_weight", type=float, default=0.05,
-                        help="Lambda in [0,1] for the convex LeJEPA loss "
-                             "(1-lambda)*prediction + lambda*SIGReg. Paper default: 0.05")
-    parser.add_argument("--sigreg_slices", type=int, default=512,
-                        help="Number of random 1-D projections for SIGReg. Default: 512")
-    parser.add_argument("--sigreg_num_freqs", type=int, default=33,
-                        help="Quadrature points for the SIGReg Epps-Pulley integral.")
 
     # Optimization
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -659,13 +586,6 @@ def main() -> None:
                 classes_per_batch=args.contrastive_classes_per_batch,
                 samples_per_class=args.contrastive_samples_per_class,
                 compound_level=args.compound_level,
-                ssl_mode=args.ssl_lejepa,
-                ssl_views=args.ssl_views,
-                ssl_rotation=args.ssl_rotation,
-                ssl_translate=args.ssl_translate,
-                ssl_min_scale=args.ssl_min_scale,
-                ssl_gaussian_blur=args.ssl_gaussian_blur,
-                ssl_compound_views=args.ssl_compound_views,
                 grafit_views=grafit_views,
                 grafit_bank=grafit_bank,
                 seed=args.seed,
@@ -693,13 +613,6 @@ def main() -> None:
             proj_hidden_dim=args.proj_hidden_dim,
             temperature=args.temperature,
             use_proj_head=args.use_proj_head,
-            dcl_ema_momentum=args.dcl_ema_momentum,
-            dcl_suspicion_tau=args.dcl_suspicion_tau,
-            dcl_suspicion_bias=args.dcl_suspicion_bias,
-            dcl_suspicion_standardize=args.dcl_suspicion_standardize,
-            dcl_normal=args.normal_dcl,
-            dcl_soft_pos=args.dcl_soft_pos_loss,
-            dcl_soft_pos_tau=args.dcl_soft_pos_tau,
             supcon_soft_pos=args.supcon_soft_pos_loss,
             supcon_soft_pos_tau=args.supcon_soft_pos_tau,
             supcon_denom_pos_weight=args.denominator_pos_weight,
@@ -712,75 +625,53 @@ def main() -> None:
             grafit_predictor=use_instance_term,
         )
 
-        if args.ssl_lejepa:
-            experiment = LeJEPAExperiment(
-                model=model,
-                lr=args.lr,
-                weight_decay=args.weight_decay,
-                sigreg_weight=args.sigreg_weight,
-                sigreg_slices=args.sigreg_slices,
-                sigreg_num_freqs=args.sigreg_num_freqs,
-                scheduler_gamma=args.scheduler_gamma,
-                scheduler=args.scheduler,
-                warmup_epochs=args.warmup_epochs,
-                max_epochs=args.epochs,
-            )
-        else:
-            experiment = ContrastiveExperiment(
-                model=model,
-                lr=args.lr,
-                weight_decay=args.weight_decay,
-                temperature=args.temperature,
-                scheduler_gamma=args.scheduler_gamma,
-                scheduler=args.scheduler,
-                warmup_epochs=args.warmup_epochs,
-                max_epochs=args.epochs,
-                contrastive_sigreg_loss=args.contrastive_sigreg_loss,
-                dcl_sigreg_loss=args.dcl_sigreg_loss,
-                dcl_soft_pos_loss=args.dcl_soft_pos_loss,
-                vanilla_dcl=args.vanilla_dcl,
-                vanilla_supcon=args.vanilla_supcon,
-                ms_loss=args.ms_loss,
-                ms_thresh=args.ms_thresh,
-                ms_margin=args.ms_margin,
-                ms_scale_pos=args.ms_scale_pos,
-                ms_scale_neg=args.ms_scale_neg,
-                grafit=args.grafit,
-                grafit_lam=args.grafit_lam,
-                grafit_bank_size=grafit_bank_size,
-                maskcon=args.maskcon,
-                maskcon_w=args.maskcon_w,
-                maskcon_soft_temperature=args.maskcon_soft_tau,
-                maskcon_queue_size=args.maskcon_queue_size,
-                bucsfr=args.bucsfr,
-                bucsfr_alpha=args.bucsfr_alpha,
-                bucsfr_queue_size=args.bucsfr_queue_size,
-                bucsfr_clusters_per_class=args.bucsfr_clusters_per_class,
-                bucsfr_threshold=args.bucsfr_threshold,
-                bucsfr_warmup_epochs=args.bucsfr_warmup_epochs,
-                bucsfr_refresh_every=args.bucsfr_refresh_every,
-                infonce_softpos=args.infonce_softpos,
-                supcon_softpos=args.supcon_soft_pos_loss,
-                supcon_inst=supcon_inst,
-                supcon_inst_weight=args.supcon_inst_weight,
-                taxocon_aug=args.taxocon_aug,
-                cross_entropy=args.cross_entropy,
-                supcon_soft_pos_tau=args.supcon_soft_pos_tau,
-                denom_pos_weight=args.denominator_pos_weight,
-                tau_annealing=args.tau_annealing,
-                supcon_tau_start=args.supcon_tau_start,
-                supcon_tau_end=args.supcon_tau_end,
-                no_pos_weight_epoch=args.no_pos_weight_epoch,
-                pos_weight_tau=args.pos_weight_tau,
-                sinkhorn=args.sinkhorn,
-                sinkhorn_iters=args.sinkhorn_iters,
-                sigreg_weight=args.sigreg_weight,
-                sigreg_slices=args.sigreg_slices,
-                EMA_pos_weight=args.EMA_pos_weight,
-                EMA_momentum=args.EMA_momentum,
-                train_cat=args.train_cat,
-                test_cats=args.test_cat,
-            )
+        experiment = ContrastiveExperiment(
+            model=model,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            temperature=args.temperature,
+            scheduler_gamma=args.scheduler_gamma,
+            scheduler=args.scheduler,
+            warmup_epochs=args.warmup_epochs,
+            max_epochs=args.epochs,
+            vanilla_supcon=args.vanilla_supcon,
+            ms_loss=args.ms_loss,
+            ms_thresh=args.ms_thresh,
+            ms_margin=args.ms_margin,
+            ms_scale_pos=args.ms_scale_pos,
+            ms_scale_neg=args.ms_scale_neg,
+            grafit=args.grafit,
+            grafit_lam=args.grafit_lam,
+            grafit_bank_size=grafit_bank_size,
+            maskcon=args.maskcon,
+            maskcon_w=args.maskcon_w,
+            maskcon_soft_temperature=args.maskcon_soft_tau,
+            maskcon_queue_size=args.maskcon_queue_size,
+            bucsfr=args.bucsfr,
+            bucsfr_alpha=args.bucsfr_alpha,
+            bucsfr_queue_size=args.bucsfr_queue_size,
+            bucsfr_clusters_per_class=args.bucsfr_clusters_per_class,
+            bucsfr_threshold=args.bucsfr_threshold,
+            bucsfr_warmup_epochs=args.bucsfr_warmup_epochs,
+            bucsfr_refresh_every=args.bucsfr_refresh_every,
+            supcon_softpos=args.supcon_soft_pos_loss,
+            supcon_inst=supcon_inst,
+            supcon_inst_weight=args.supcon_inst_weight,
+            taxocon_aug=args.taxocon_aug,
+            cross_entropy=args.cross_entropy,
+            supcon_soft_pos_tau=args.supcon_soft_pos_tau,
+            denom_pos_weight=args.denominator_pos_weight,
+            tau_annealing=args.tau_annealing,
+            supcon_tau_start=args.supcon_tau_start,
+            supcon_tau_end=args.supcon_tau_end,
+            no_pos_weight_epoch=args.no_pos_weight_epoch,
+            sinkhorn=args.sinkhorn,
+            sinkhorn_iters=args.sinkhorn_iters,
+            EMA_pos_weight=args.EMA_pos_weight,
+            EMA_momentum=args.EMA_momentum,
+            train_cat=args.train_cat,
+            test_cats=args.test_cat,
+        )
     else:
         if not args.data_dir:
             raise ValueError(f"--data_dir is required for --model {args.model}.")
@@ -845,95 +736,60 @@ def main() -> None:
             "convnext_tiny": "ConvNeXtT",
         }.get(args.backbone, args.backbone)
         model_prefix = f"FFT_{backbone_tag}"
-        if args.ssl_lejepa:
-            cv_tag = "_CompViews" if args.ssl_compound_views else ""
-            aug_tag = (f"_Aug-R{args.ssl_rotation:.0f}T{args.ssl_translate}"
-                       f"S{args.ssl_min_scale}B{args.ssl_gaussian_blur}")
-            ckpt_suffix = (
-                f"{model_prefix}"
-                f"_BS{args.batch_size}"
-                f"_{proj_tag}"
-                f"_LeJEPA_Views{args.ssl_views}_SW{args.sigreg_weight}"
-                f"{cv_tag}{aug_tag}"
-                f"{dataset_tag}"
-            )
-        else:
-            sigreg_tag = f"_SIGReg{args.sigreg_weight}" if args.contrastive_sigreg_loss else ""
-            dcl_variant = "-Normal" if args.normal_dcl else ""
-            if args.dcl_sigreg_loss and not args.normal_dcl:
-                std_tag = "-Std" if args.dcl_suspicion_standardize else ""
-                susp_tag = f"_EMA{args.dcl_ema_momentum}_B{args.dcl_suspicion_bias}_Tau{args.dcl_suspicion_tau}{std_tag}"
-            else:
-                susp_tag = ""
-            dcl_tag = f"_DCL{dcl_variant}-SIGReg{args.sigreg_weight}{susp_tag}" if args.dcl_sigreg_loss else ""
-            ema_pw_tag = f"-EMA{args.EMA_momentum}" if args.EMA_pos_weight else ""
-            softpos_tag = f"_DCLSoftPos-Tau{args.dcl_soft_pos_tau}{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}{ema_pw_tag}" if args.dcl_soft_pos_loss else ""
-            vanilla_dcl_tag = "_VanillaDCL" if args.vanilla_dcl else ""
-            vanilla_supcon_tag = "_VanillaSupCon" if args.vanilla_supcon else ""
-            ms_loss_tag = (
-                f"_MS-L{args.ms_thresh}-M{args.ms_margin}"
-                f"-A{args.ms_scale_pos}-B{args.ms_scale_neg}"
-            ) if args.ms_loss else ""
-            cross_entropy_tag = "_CrossEntropy" if args.cross_entropy else ""
-            grafit_tag = (
-                f"_Grafit-Lam{args.grafit_lam}-Views{args.grafit_views}"
-                f"{'-Bank' if args.grafit_bank else ''}"
-            ) if args.grafit else ""
-            maskcon_tag = (
-                f"_MaskCon-W{args.maskcon_w}-T0{args.maskcon_soft_tau}"
-                f"-Q{args.maskcon_queue_size}-Views{args.grafit_views}"
-                f"-M{args.EMA_momentum}"
-            ) if args.maskcon else ""
-            bucsfr_tag = (
-                f"_BuCSFR-A{args.bucsfr_alpha}-C{args.bucsfr_clusters_per_class}"
-                f"-T{args.bucsfr_threshold}-W{args.bucsfr_warmup_epochs}"
-                f"-Q{args.bucsfr_queue_size}-Views{args.grafit_views}"
-                f"-M{args.EMA_momentum}"
-            ) if args.bucsfr else ""
-            infonce_softpos_tag = (
-                f"_InfoNCESoftPos-Tau{args.pos_weight_tau}"
-                f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
-                f"{'-DenomPosW' if args.denominator_pos_weight else ''}"
-                f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
-                f"{ema_pw_tag}"
-            ) if args.infonce_softpos else ""
-            supcon_softpos_tag = (
-                f"_SupConSoftPos-{'LinearTau' + str(args.supcon_tau_start) + 'to' + str(args.supcon_tau_end) if args.tau_annealing else 'Tau' + str(args.supcon_soft_pos_tau)}"
-                f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
-                f"{'-DenomPosW' if args.denominator_pos_weight else ''}"
-                f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
-                f"{'-Inst' + str(args.supcon_inst_weight) + 'Views' + str(args.grafit_views) if args.supcon_inst else ''}"
-                f"{ema_pw_tag}"
-            ) if args.supcon_soft_pos_loss else ""
-            taxocon_aug_tag = (
-                f"_TaxoConAug-{'LinearTau' + str(args.supcon_tau_start) + 'to' + str(args.supcon_tau_end) if args.tau_annealing else 'Tau' + str(args.supcon_soft_pos_tau)}"
-                f"-Views{args.grafit_views}"
-                f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
-                f"{'-DenomPosW' if args.denominator_pos_weight else ''}"
-                f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
-                f"{ema_pw_tag}"
-            ) if args.taxocon_aug else ""
-            ckpt_suffix = (
-                f"{model_prefix}"
-                f"_P{p_val}_K{k_val}_BS{args.batch_size}"
-                f"_{proj_tag}"
-                f"_T{args.temperature}"
-                f"{level_tag}"
-                f"{sigreg_tag}"
-                f"{dcl_tag}"
-                f"{softpos_tag}"
-                f"{vanilla_dcl_tag}"
-                f"{vanilla_supcon_tag}"
-                f"{ms_loss_tag}"
-                f"{grafit_tag}"
-                f"{maskcon_tag}"
-                f"{bucsfr_tag}"
-                f"{cross_entropy_tag}"
-                f"{infonce_softpos_tag}"
-                f"{supcon_softpos_tag}"
-                f"{taxocon_aug_tag}"
-                f"{dataset_tag}"
-            )
+        ema_pw_tag = f"-EMA{args.EMA_momentum}" if args.EMA_pos_weight else ""
+        vanilla_supcon_tag = "_VanillaSupCon" if args.vanilla_supcon else ""
+        ms_loss_tag = (
+            f"_MS-L{args.ms_thresh}-M{args.ms_margin}"
+            f"-A{args.ms_scale_pos}-B{args.ms_scale_neg}"
+        ) if args.ms_loss else ""
+        cross_entropy_tag = "_CrossEntropy" if args.cross_entropy else ""
+        grafit_tag = (
+            f"_Grafit-Lam{args.grafit_lam}-Views{args.grafit_views}"
+            f"{'-Bank' if args.grafit_bank else ''}"
+        ) if args.grafit else ""
+        maskcon_tag = (
+            f"_MaskCon-W{args.maskcon_w}-T0{args.maskcon_soft_tau}"
+            f"-Q{args.maskcon_queue_size}-Views{args.grafit_views}"
+            f"-M{args.EMA_momentum}"
+        ) if args.maskcon else ""
+        bucsfr_tag = (
+            f"_BuCSFR-A{args.bucsfr_alpha}-C{args.bucsfr_clusters_per_class}"
+            f"-T{args.bucsfr_threshold}-W{args.bucsfr_warmup_epochs}"
+            f"-Q{args.bucsfr_queue_size}-Views{args.grafit_views}"
+            f"-M{args.EMA_momentum}"
+        ) if args.bucsfr else ""
+        supcon_softpos_tag = (
+            f"_SupConSoftPos-{'LinearTau' + str(args.supcon_tau_start) + 'to' + str(args.supcon_tau_end) if args.tau_annealing else 'Tau' + str(args.supcon_soft_pos_tau)}"
+            f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
+            f"{'-DenomPosW' if args.denominator_pos_weight else ''}"
+            f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
+            f"{'-Inst' + str(args.supcon_inst_weight) + 'Views' + str(args.grafit_views) if args.supcon_inst else ''}"
+            f"{ema_pw_tag}"
+        ) if args.supcon_soft_pos_loss else ""
+        taxocon_aug_tag = (
+            f"_TaxoConAug-{'LinearTau' + str(args.supcon_tau_start) + 'to' + str(args.supcon_tau_end) if args.tau_annealing else 'Tau' + str(args.supcon_soft_pos_tau)}"
+            f"-Views{args.grafit_views}"
+            f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
+            f"{'-DenomPosW' if args.denominator_pos_weight else ''}"
+            f"{'-Sinkhorn' + str(args.sinkhorn_iters) if args.sinkhorn else ''}"
+            f"{ema_pw_tag}"
+        ) if args.taxocon_aug else ""
+        ckpt_suffix = (
+            f"{model_prefix}"
+            f"_P{p_val}_K{k_val}_BS{args.batch_size}"
+            f"_{proj_tag}"
+            f"_T{args.temperature}"
+            f"{level_tag}"
+            f"{vanilla_supcon_tag}"
+            f"{ms_loss_tag}"
+            f"{grafit_tag}"
+            f"{maskcon_tag}"
+            f"{bucsfr_tag}"
+            f"{cross_entropy_tag}"
+            f"{supcon_softpos_tag}"
+            f"{taxocon_aug_tag}"
+            f"{dataset_tag}"
+        )
     else:
         ckpt_suffix = f"{args.model}-latent{args.latent_dim}-kld{args.kld_weight}-BS{args.batch_size}"
 
@@ -999,10 +855,6 @@ def main() -> None:
                 f"{args.supcon_tau_start}->{args.supcon_tau_end}"
                 if args.tau_annealing else args.supcon_soft_pos_tau
             )
-        elif args.infonce_softpos:
-            pos_weight_tau = args.pos_weight_tau
-        elif args.dcl_soft_pos_loss:
-            pos_weight_tau = args.dcl_soft_pos_tau
         else:
             pos_weight_tau = "n/a"
 

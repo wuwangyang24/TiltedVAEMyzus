@@ -15,7 +15,7 @@ from Loss import (
 
 class ContrastiveExperiment(pl.LightningModule):
     """LightningModule wrapping the backbone model for supervised contrastive
-    (InfoNCE / SupCon) training on synthesis-program labels.
+    (SupCon) training on synthesis-program labels.
 
     Args:
         model: the :class:`Backbone` model to train.
@@ -34,11 +34,6 @@ class ContrastiveExperiment(pl.LightningModule):
                  scheduler: str = "exponential",
                  warmup_epochs: int = 0,
                  max_epochs: int = 100,
-                 contrastive_sigreg_loss: bool = False,
-                 dcl_sigreg_loss: bool = False,
-                 dcl_soft_pos_loss: bool = False,
-                 vanilla_dcl: bool = False,
-                 infonce_softpos: bool = False,
                  supcon_softpos: bool = False,
                  supcon_inst: bool = False,
                  supcon_inst_weight: float = 1.0,
@@ -64,7 +59,6 @@ class ContrastiveExperiment(pl.LightningModule):
                  bucsfr_warmup_epochs: int = 10,
                  bucsfr_refresh_every: int = 1,
                  cross_entropy: bool = False,
-                 pos_weight_tau: float = 0.1,
                  supcon_soft_pos_tau: float = 0.1,
                  denom_pos_weight: bool = False,
                  tau_annealing: bool = False,
@@ -73,8 +67,6 @@ class ContrastiveExperiment(pl.LightningModule):
                  no_pos_weight_epoch: int = 0,
                  sinkhorn: bool = False,
                  sinkhorn_iters: int = 5,
-                 sigreg_weight: float = 0.1,
-                 sigreg_slices: int = 512,
                  EMA_pos_weight: bool = False,
                  EMA_momentum: float = 0.999,
                  train_cat: str = "train",
@@ -88,11 +80,6 @@ class ContrastiveExperiment(pl.LightningModule):
         self.scheduler_type = scheduler
         self.warmup_epochs = warmup_epochs
         self.max_epochs = max_epochs
-        self.contrastive_sigreg_loss = contrastive_sigreg_loss
-        self.dcl_sigreg_loss = dcl_sigreg_loss
-        self.dcl_soft_pos_loss = dcl_soft_pos_loss
-        self.vanilla_dcl = vanilla_dcl
-        self.infonce_softpos = infonce_softpos
         self.supcon_softpos = supcon_softpos
         self.supcon_inst = supcon_inst
         self.supcon_inst_weight = supcon_inst_weight
@@ -138,7 +125,6 @@ class ContrastiveExperiment(pl.LightningModule):
         # Latest dendrogram: {"im2cluster", "centroids", "density"}.
         self._bucsfr_clusters: Optional[Dict[str, torch.Tensor]] = None
         self.cross_entropy = cross_entropy
-        self.pos_weight_tau = pos_weight_tau
         self.supcon_soft_pos_tau = supcon_soft_pos_tau
         self.denom_pos_weight = denom_pos_weight
         self.tau_annealing = tau_annealing
@@ -149,8 +135,6 @@ class ContrastiveExperiment(pl.LightningModule):
         self.no_pos_weight_epoch = no_pos_weight_epoch
         self.sinkhorn = sinkhorn
         self.sinkhorn_iters = sinkhorn_iters
-        self.sigreg_weight = sigreg_weight
-        self.sigreg_slices = sigreg_slices
         self.train_cat = train_cat
         self.test_cats = list(test_cats) if test_cats else ["test"]
 
@@ -339,30 +323,7 @@ class ContrastiveExperiment(pl.LightningModule):
         else:
             loss_test_labels = test_labels
 
-        if self.dcl_soft_pos_loss:
-            embeddings = self.model(images)
-            loss_dict = self.model.dcl_soft_pos_loss_function(
-                embeddings, labels, temperature=self.temperature,
-                pos_weight_sim=self._ema_pos_weight_sim(images),
-                test_labels=loss_test_labels)
-        elif self.dcl_sigreg_loss:
-            embeddings = self.model(images, normalize=False)
-            loss_dict = self.model.dcl_sigreg_loss_function(
-                embeddings, labels, temperature=self.temperature,
-                sigreg_weight=self.sigreg_weight,
-                sigreg_slices=self.sigreg_slices,
-                test_labels=loss_test_labels)
-        elif self.contrastive_sigreg_loss:
-            embeddings = self.model(images, normalize=False)
-            loss_dict = self.model.contrastive_sigreg_loss_function(
-                embeddings, labels, temperature=self.temperature,
-                sigreg_weight=self.sigreg_weight,
-                sigreg_slices=self.sigreg_slices)
-        elif self.vanilla_dcl:
-            embeddings = self.model(images)
-            loss_dict = self.model.vanilla_dcl_loss_function(
-                embeddings, labels, temperature=self.temperature)
-        elif self.vanilla_supcon:
+        if self.vanilla_supcon:
             embeddings = self.model(images)
             loss_dict = self.model.vanilla_supcon_loss_function(
                 embeddings, labels, temperature=self.temperature)
@@ -406,16 +367,6 @@ class ContrastiveExperiment(pl.LightningModule):
                          if self._bucsfr_clusters else None),
                 queue=self.bucsfr_queue,
                 update_queue=self.training)
-        elif self.infonce_softpos:
-            embeddings = self.model(images)
-            loss_dict = self.model.infonce_softpos_loss_function(
-                embeddings, labels, temperature=self.temperature,
-                pos_weight_tau=self.pos_weight_tau,
-                use_pos_weighting=self._use_pos_weighting(),
-                denom_pos_weight=self.denom_pos_weight,
-                sinkhorn=self.sinkhorn, sinkhorn_iters=self.sinkhorn_iters,
-                pos_weight_sim=self._ema_pos_weight_sim(images),
-                test_labels=loss_test_labels)
         elif self.supcon_softpos:
             if self.supcon_inst:
                 embeddings, predictions, targets = self._byol_views(images)
@@ -458,7 +409,7 @@ class ContrastiveExperiment(pl.LightningModule):
         if self.supcon_softpos or self.taxocon_aug:
             self.log("train_supcon_tau", self._current_supcon_tau(),
                      on_step=False, on_epoch=True)
-        if self.supcon_softpos or self.infonce_softpos or self.taxocon_aug:
+        if self.supcon_softpos or self.taxocon_aug:
             self.log("train_pos_weight_active", float(self._use_pos_weighting()),
                      on_step=False, on_epoch=True)
         self.log(
@@ -707,117 +658,6 @@ class ContrastiveExperiment(pl.LightningModule):
             for k in ks:
                 hits[k][start:end] = match[:, :min(k, max_k)].any(dim=1)
         return {k: hits[k].float().mean() for k in ks}
-
-    def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
-            self.model.trainable_parameters(),
-            lr=self.lr,
-            weight_decay=self.weight_decay,
-        )
-        if self.scheduler_gamma is None and self.scheduler_type == "exponential":
-            return optimizer
-
-        if self.scheduler_type == "cosine":
-            main_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer, T_max=self.max_epochs - self.warmup_epochs, eta_min=1e-7
-            )
-        else:
-            main_scheduler = torch.optim.lr_scheduler.ExponentialLR(
-                optimizer, gamma=self.scheduler_gamma
-            )
-
-        if self.warmup_epochs > 0:
-            warmup = torch.optim.lr_scheduler.LinearLR(
-                optimizer, start_factor=0.01, total_iters=self.warmup_epochs
-            )
-            scheduler = torch.optim.lr_scheduler.SequentialLR(
-                optimizer, schedulers=[warmup, main_scheduler],
-                milestones=[self.warmup_epochs]
-            )
-        else:
-            scheduler = main_scheduler
-
-        return [optimizer], [scheduler]
-
-
-class LeJEPAExperiment(pl.LightningModule):
-    """LightningModule training the backbone model with the LeJEPA
-    self-supervised objective (Balestriero & LeCun, 2025).
-
-    Instead of supervised contrastive learning, this optimizes a label-free
-    loss: a prediction/invariance term over multiple augmented views plus the
-    SIGReg isotropic-Gaussian regularizer that prevents representation collapse.
-
-    Args:
-        model: the :class:`Backbone` model to train.
-        lr: learning rate for the AdamW optimizer.
-        weight_decay: L2 weight decay for the optimizer.
-        sigreg_weight: weight of the SIGReg term relative to the prediction term.
-        sigreg_slices: number of random 1-D projections used by SIGReg.
-        sigreg_num_freqs: quadrature points for the Epps-Pulley integral.
-        scheduler_gamma: multiplicative LR decay per epoch (None to disable).
-        scheduler: 'exponential' or 'cosine'.
-        warmup_epochs: linear LR warmup epochs before the main schedule.
-        max_epochs: total training epochs (for the cosine schedule).
-    """
-
-    def __init__(self,
-                 model: Backbone,
-                 lr: float = 1e-4,
-                 weight_decay: float = 1e-4,
-                 sigreg_weight: float = 0.05,
-                 sigreg_slices: int = 512,
-                 sigreg_num_freqs: int = 33,
-                 scheduler_gamma: float = 0.95,
-                 scheduler: str = "cosine",
-                 warmup_epochs: int = 0,
-                 max_epochs: int = 100) -> None:
-        super().__init__()
-        self.model = model
-        self.lr = lr
-        self.weight_decay = weight_decay
-        self.sigreg_weight = sigreg_weight
-        self.sigreg_slices = sigreg_slices
-        self.sigreg_num_freqs = sigreg_num_freqs
-        self.scheduler_gamma = scheduler_gamma
-        self.scheduler_type = scheduler
-        self.warmup_epochs = warmup_epochs
-        self.max_epochs = max_epochs
-        self.save_hyperparameters(ignore=["model"])
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.model(x)
-
-    def _step(self, batch: Any) -> Dict[str, torch.Tensor]:
-        # views: (B, V, C, H, W); labels are unused by the LeJEPA objective.
-        views, _ = batch
-        b, v = views.shape[0], views.shape[1]
-        flat = views.reshape(b * v, *views.shape[2:])
-        # Raw (un-normalized) embeddings: SIGReg targets an isotropic Gaussian.
-        emb = self.model(flat, normalize=False)             # (B*V, D)
-        view_emb = emb.reshape(b, v, -1).permute(1, 0, 2)   # (V, B, D)
-        return self.model.lejepa_loss_function(
-            view_emb,
-            sigreg_weight=self.sigreg_weight,
-            sigreg_slices=self.sigreg_slices,
-            sigreg_num_freqs=self.sigreg_num_freqs,
-        )
-
-    def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        loss_dict = self._step(batch)
-        self.log(
-            "train_loss", loss_dict["loss"],
-            on_step=True, on_epoch=True, prog_bar=True,
-        )
-        return loss_dict["loss"]
-
-    def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        loss_dict = self._step(batch)
-        self.log(
-            "val_loss", loss_dict["loss"],
-            on_step=False, on_epoch=True, prog_bar=True, sync_dist=True,
-        )
-        return loss_dict["loss"]
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(

@@ -163,16 +163,6 @@ def load_checkpoint(model: torch.nn.Module, ckpt_path: str) -> None:
     state_dict = ckpt["state_dict"] if isinstance(ckpt, dict) and "state_dict" in ckpt else ckpt
     cleaned = {(k[len("model."):] if k.startswith("model.") else k): v
                for k, v in state_dict.items()}
-    # Resize DCL memory-bank buffers to match the checkpoint before loading.
-    for key in ("dcl_sigreg_loss.class_means", "dcl_sigreg_loss.initialized"):
-        if key in cleaned:
-            parent = model
-            parts = key.split(".")
-            for attr in parts[:-1]:
-                parent = getattr(parent, attr)
-            buf = cleaned[key]
-            if getattr(parent, parts[-1]).shape != buf.shape:
-                parent.register_buffer(parts[-1], torch.empty_like(buf))
     incompatible = model.load_state_dict(cleaned, strict=False)
     backbone_missing = [k for k in incompatible.missing_keys if k.startswith("backbone.")]
     print(f"[load_checkpoint] loaded {len(cleaned)} tensors; "

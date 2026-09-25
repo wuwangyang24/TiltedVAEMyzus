@@ -25,41 +25,13 @@ def gaussianity_metrics(z: Tensor) -> Dict[str, Tensor]:
     }
 
 
-def sigreg_loss(z: Tensor, num_slices: int = 512, num_freqs: int = 33,
-                t_max: float = 8.0) -> Tensor:
-    """Sketched Isotropic Gaussian Regularization (SIGReg).
-
-    Projects the embeddings onto ``num_slices`` random directions drawn
-    uniformly on the unit sphere and, for each 1-D projection, measures its
-    deviation from a standard normal N(0, 1) with the Epps-Pulley
-    empirical-characteristic-function goodness-of-fit statistic. Averaged
-    over slices this is a differentiable, unbiased estimate of the distance
-    between the embedding distribution and an isotropic Gaussian.
-    """
-    m, d = z.shape
-    device, dtype = z.device, z.dtype
-
-    # Random projection directions, uniform on the unit sphere.
-    dirs = torch.randn(d, num_slices, device=device, dtype=dtype)
-    dirs = F.normalize(dirs, dim=0)
-    proj = z @ dirs                                   # (M, num_slices)
-
-    # Frequency grid and Gaussian weighting w(t) = exp(-t^2 / 2).
-    t = torch.linspace(-t_max, t_max, num_freqs, device=device, dtype=dtype)
-    weight = torch.exp(-0.5 * t ** 2)                 # (F,)
-
-    # Empirical characteristic function per slice: E_j[exp(i t x_j)].
-    tp = t.view(1, -1, 1) * proj.t().unsqueeze(1)     # (num_slices, F, M)
-    emp_re = torch.cos(tp).mean(dim=2)                # (num_slices, F)
-    emp_im = torch.sin(tp).mean(dim=2)
-    tgt_re = torch.exp(-0.5 * t ** 2)                 # N(0,1) CF (imag = 0)
-
-    diff2 = (emp_re - tgt_re) ** 2 + emp_im ** 2      # (num_slices, F)
-    dt = t[1] - t[0]
-    # Epps-Pulley statistic includes the sample-size factor N (= M here),
-    # which sets its magnitude relative to the prediction term.
-    stat = m * (diff2 * weight).sum(dim=1) * dt       # (num_slices,)
-    return stat.mean()
+def sinkhorn_normalize(M: Tensor, n_iters: int = 5) -> Tensor:
+    """Sinkhorn-Knopp iterations to produce a doubly-stochastic matrix."""
+    M = M.clamp(min=1e-12)
+    for _ in range(n_iters):
+        M = M / M.sum(dim=1, keepdim=True).clamp(min=1e-12)
+        M = M / M.sum(dim=0, keepdim=True).clamp(min=1e-12)
+    return M
 
 
 @torch.no_grad()

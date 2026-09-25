@@ -6,8 +6,7 @@ import torch.nn as nn
 from torch import Tensor
 from torch.nn import functional as F
 
-from .utils import batch_knn_accuracy, gaussianity_metrics
-from .dcl_soft_pos import sinkhorn_normalize
+from .utils import batch_knn_accuracy, gaussianity_metrics, sinkhorn_normalize
 from .grafit import byol_instance_loss
 
 _SMALL_NUM = np.log(1e-45)

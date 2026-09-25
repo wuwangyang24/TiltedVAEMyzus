@@ -6,9 +6,8 @@ from torch import Tensor
 from torch.nn import functional as F
 
 from Loss import (
-    infonce_loss, contrastive_sigreg_loss, DCLSIGRegLoss, DCLSoftPosLoss,
-    sigreg_loss, batch_knn_accuracy, gaussianity_metrics,
-    vanilla_dcl_loss, infonce_softpos_loss, SupConSoftPosLoss, TaxoConAugLoss,
+    batch_knn_accuracy, gaussianity_metrics,
+    SupConSoftPosLoss, TaxoConAugLoss,
     vanilla_supcon_loss, multi_similarity_loss, grafit_loss, maskcon_loss,
     bucsfr_loss,
 )
@@ -29,7 +28,7 @@ _SUPPORTED_BACKBONES = (
 
 class Backbone(nn.Module):
     """Fully fine-tuned convolutional / ViT backbone with an optional projection
-    head for supervised contrastive (InfoNCE / SupCon) representation learning.
+    head for supervised contrastive (SupCon) representation learning.
 
     The entire backbone is trainable (full fine-tuning). ``forward`` returns
     L2-normalized embeddings suitable for a cosine-similarity contrastive
@@ -45,7 +44,7 @@ class Backbone(nn.Module):
         img_size: square input size fed to the backbone (any size >= 32).
         embedding_dim: dimension of the output (projected) embedding.
         proj_hidden_dim: hidden width of the 2-layer projection MLP.
-        temperature: softmax temperature for the InfoNCE / SupCon loss.
+        temperature: softmax temperature for the SupCon loss.
         use_proj_head: if True, add a 2-layer MLP projection head on top of the
             backbone features; otherwise output the L2-normalized backbone
             features directly.
@@ -62,13 +61,6 @@ class Backbone(nn.Module):
                  proj_hidden_dim: int = 2048,
                  temperature: float = 0.1,
                  use_proj_head: bool = True,
-                 dcl_ema_momentum: float = 0.9,
-                 dcl_suspicion_tau: float = 0.1,
-                 dcl_suspicion_bias: float = 0.5,
-                 dcl_suspicion_standardize: bool = False,
-                 dcl_normal: bool = False,
-                 dcl_soft_pos: bool = False,
-                 dcl_soft_pos_tau: float = 0.1,
                  supcon_soft_pos: bool = False,
                  supcon_soft_pos_tau: float = 0.1,
                  supcon_denom_pos_weight: bool = False,
@@ -149,21 +141,6 @@ class Backbone(nn.Module):
         else:
             self.grafit_predictor = None
 
-        # Stateful DCL+SIGReg loss with its EMA class-mean memory bank.
-        self.dcl_sigreg_loss = DCLSIGRegLoss(
-            ema_momentum=dcl_ema_momentum,
-            suspicion_tau=dcl_suspicion_tau,
-            suspicion_bias=dcl_suspicion_bias,
-            suspicion_standardize=dcl_suspicion_standardize,
-            normal_dcl=dcl_normal,
-        )
-
-        self.dcl_soft_pos_loss = DCLSoftPosLoss(
-            pos_weight_tau=dcl_soft_pos_tau,
-            sinkhorn=sinkhorn,
-            sinkhorn_iters=sinkhorn_iters,
-        ) if dcl_soft_pos else None
-
         self.supcon_soft_pos_loss = SupConSoftPosLoss(
             pos_weight_tau=supcon_soft_pos_tau,
             sinkhorn=sinkhorn,
@@ -187,8 +164,7 @@ class Backbone(nn.Module):
 
         By default the embeddings are L2-normalized (for the cosine-similarity
         contrastive objective). Pass ``normalize=False`` to obtain the raw
-        projected features (e.g. for the SIGReg objective whose target is an
-        isotropic Gaussian in unbounded Euclidean space).
+        projected features.
         """
         feats = self.backbone(x)          # (N, feat_dim)
         if self.projection is not None:
@@ -201,22 +177,7 @@ class Backbone(nn.Module):
     def loss_function(self, embeddings: Tensor, labels: Tensor,
                       **kwargs) -> Dict[str, Tensor]:
         kwargs.setdefault("temperature", self.temperature)
-        return infonce_loss(embeddings, labels, **kwargs)
-
-    def contrastive_sigreg_loss_function(
-        self, embeddings: Tensor, labels: Tensor, **kwargs,
-    ) -> Dict[str, Tensor]:
-        return contrastive_sigreg_loss(embeddings, labels, **kwargs)
-
-    def dcl_sigreg_loss_function(
-        self, embeddings: Tensor, labels: Tensor, **kwargs,
-    ) -> Dict[str, Tensor]:
-        return self.dcl_sigreg_loss(embeddings, labels, **kwargs)
-
-    def dcl_soft_pos_loss_function(
-        self, embeddings: Tensor, labels: Tensor, **kwargs,
-    ) -> Dict[str, Tensor]:
-        return self.dcl_soft_pos_loss(embeddings, labels, **kwargs)
+        return vanilla_supcon_loss(embeddings, labels, **kwargs)
 
     def supcon_soft_pos_loss_function(
         self, embeddings: Tensor, labels: Tensor, **kwargs,
@@ -229,12 +190,6 @@ class Backbone(nn.Module):
     ) -> Dict[str, Tensor]:
         kwargs.setdefault("temperature", self.temperature)
         return self.taxocon_aug_loss(embeddings, labels, **kwargs)
-
-    def vanilla_dcl_loss_function(
-        self, embeddings: Tensor, labels: Tensor, **kwargs,
-    ) -> Dict[str, Tensor]:
-        kwargs.setdefault("temperature", self.temperature)
-        return vanilla_dcl_loss(embeddings, labels, **kwargs)
 
     def vanilla_supcon_loss_function(
         self, embeddings: Tensor, labels: Tensor, **kwargs,
@@ -273,12 +228,6 @@ class Backbone(nn.Module):
         kwargs.setdefault("class_logits", self.classify(embeddings))
         return bucsfr_loss(embeddings, labels, **kwargs)
 
-    def infonce_softpos_loss_function(
-        self, embeddings: Tensor, labels: Tensor, **kwargs,
-    ) -> Dict[str, Tensor]:
-        kwargs.setdefault("temperature", self.temperature)
-        return infonce_softpos_loss(embeddings, labels, **kwargs)
-
     def classify(self, embeddings: Tensor) -> Optional[Tensor]:
         """Coarse-class logits, or None when the model has no classifier head."""
         return None if self.classifier is None else self.classifier(embeddings)
@@ -305,11 +254,6 @@ class Backbone(nn.Module):
     @torch.no_grad()
     def _gaussianity_metrics(z: Tensor) -> Dict[str, Tensor]:
         return gaussianity_metrics(z)
-
-    @staticmethod
-    def _sigreg_loss(z: Tensor, num_slices: int = 512, num_freqs: int = 33,
-                     t_max: float = 8.0) -> Tensor:
-        return sigreg_loss(z, num_slices, num_freqs, t_max)
 
     @staticmethod
     @torch.no_grad()

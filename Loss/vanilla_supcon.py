@@ -1,12 +1,12 @@
 """Vanilla Supervised Contrastive Loss (Khosla et al., 2020).
 
-A clean, standalone implementation of SupCon with **no** SIGReg regularizer and
-**no** similarity-weighted (soft) positives (unlike ``SupConSoftPosLoss``). This
+A clean, standalone implementation of SupCon with **no** similarity-weighted
+(soft) positives (unlike ``SupConSoftPosLoss``). This
 is the supervised, single-view form used by the training pipeline: a batch of
 L2-normalized embeddings with integer labels, where every same-label sample is a
 positive.
 
-SupCon uses the *coupled* InfoNCE denominator (all non-self samples, i.e. both
+SupCon uses the *coupled* denominator (all non-self samples, i.e. both
 positives and negatives) and averages the positive log-probabilities uniformly
 over each anchor's positive set (the ``L_out`` formulation). For an anchor ``i``
 with positive set ``P(i)`` and all non-self samples ``A(i)``::
