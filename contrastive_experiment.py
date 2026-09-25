@@ -8,7 +8,9 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 
 from Models import DinoV2LoRA
-from Loss import GrafitMemoryBank, MaskConQueue, multiview_similarity
+from Loss import (
+    BuCSFRDendrogram, GrafitMemoryBank, MaskConQueue, multiview_similarity,
+)
 
 
 class ContrastiveExperiment(pl.LightningModule):
@@ -57,6 +59,13 @@ class ContrastiveExperiment(pl.LightningModule):
                  maskcon_w: float = 1.0,
                  maskcon_soft_temperature: float = 0.1,
                  maskcon_queue_size: int = 4096,
+                 bucsfr: bool = False,
+                 bucsfr_alpha: float = 0.5,
+                 bucsfr_queue_size: int = 4096,
+                 bucsfr_clusters_per_class: int = 20,
+                 bucsfr_threshold: float = 1.1,
+                 bucsfr_warmup_epochs: int = 10,
+                 bucsfr_refresh_every: int = 1,
                  cross_entropy: bool = False,
                  pos_weight_tau: float = 0.1,
                  supcon_soft_pos_tau: float = 0.1,
@@ -114,6 +123,23 @@ class ContrastiveExperiment(pl.LightningModule):
                          getattr(model, "output_dim", model.embedding_dim))
             if maskcon and maskcon_queue_size > 0 else None
         )
+        self.bucsfr = bucsfr
+        self.bucsfr_alpha = bucsfr_alpha
+        self.bucsfr_warmup_epochs = bucsfr_warmup_epochs
+        self.bucsfr_refresh_every = max(bucsfr_refresh_every, 1)
+        # Same MoCo-style key queue as MaskCon; here it holds the candidates
+        # instance selection samples its positives and negatives from.
+        self.bucsfr_queue = (
+            MaskConQueue(bucsfr_queue_size,
+                         getattr(model, "output_dim", model.embedding_dim))
+            if bucsfr and bucsfr_queue_size > 0 else None
+        )
+        self.bucsfr_dendrogram = BuCSFRDendrogram(
+            clusters_per_class=bucsfr_clusters_per_class,
+            threshold=bucsfr_threshold,
+        ) if bucsfr else None
+        # Latest dendrogram: {"im2cluster", "centroids", "density"}.
+        self._bucsfr_clusters: Optional[Dict[str, torch.Tensor]] = None
         self.cross_entropy = cross_entropy
         self.pos_weight_tau = pos_weight_tau
         self.supcon_soft_pos_tau = supcon_soft_pos_tau
@@ -140,7 +166,7 @@ class ContrastiveExperiment(pl.LightningModule):
         self.EMA_momentum = EMA_momentum
         # Grafit's instance term needs the EMA target branch f_xi of Eq. 1;
         # MaskCon needs the same branch as its momentum key encoder.
-        if EMA_pos_weight or grafit or supcon_inst or maskcon:
+        if EMA_pos_weight or grafit or supcon_inst or maskcon or bucsfr:
             self.ema_model = copy.deepcopy(model)
             for p in self.ema_model.parameters():
                 p.requires_grad_(False)
@@ -214,6 +240,60 @@ class ContrastiveExperiment(pl.LightningModule):
             k = self.ema_model(images[:, 1 if images.size(1) > 1 else 0])
         return q, k
 
+    def _bucsfr_cluster_labels(self, sample_idx: Optional[torch.Tensor]):
+        """Dendrogram cluster id of each sample in the batch, or None before the
+        first dendrogram (warmup) / at validation time (no dataset index)."""
+        if self._bucsfr_clusters is None or sample_idx is None:
+            return None
+        im2cluster = self._bucsfr_clusters["im2cluster"]
+        return im2cluster[sample_idx.view(-1).to(im2cluster.device)]
+
+    @torch.no_grad()
+    def _refresh_bucsfr_dendrogram(self) -> None:
+        """Re-encode the training set with the momentum encoder and rebuild the
+        per-coarse-class dendrogram (one merge per class per call)."""
+        from torch.utils.data import DataLoader
+
+        dataset = self.trainer.datamodule.train_dataset
+        loader = DataLoader(
+            dataset,
+            batch_size=self.trainer.datamodule.batch_size,
+            shuffle=False,
+            num_workers=self.trainer.datamodule.num_workers,
+            pin_memory=True,
+        )
+
+        features = torch.zeros(len(dataset), self.model.output_dim,
+                               device=self.device)
+        labels = torch.zeros(len(dataset), dtype=torch.long, device=self.device)
+        was_training = self.model.training
+        self.ema_model.eval()
+        for batch in loader:
+            # (image, label, [test_labels], index) depending on the dataset.
+            images, batch_labels, idx = batch[0], batch[1], batch[-1]
+            images = images.to(self.device)
+            if images.ndim == 5:  # multi-view batch: cluster the first view
+                images = images[:, 0]
+            idx = idx.to(self.device)
+            features[idx] = self.ema_model(images).float()
+            labels[idx] = batch_labels.view(-1).to(self.device)
+        self.model.train(was_training)
+
+        self._bucsfr_clusters = self.bucsfr_dendrogram.build(features, labels)
+        n_clusters = self._bucsfr_clusters["centroids"].size(0)
+        print(f"[BuCSFR] epoch {self.current_epoch}: dendrogram has "
+              f"{n_clusters} clusters over {len(self.bucsfr_dendrogram.clusters_per_class)} "
+              f"coarse classes", flush=True)
+        self.log("train_bucsfr_num_clusters", float(n_clusters),
+                 on_step=False, on_epoch=True, rank_zero_only=True)
+
+    def on_train_epoch_start(self) -> None:
+        if not self.bucsfr or self.current_epoch < self.bucsfr_warmup_epochs:
+            return
+        if (self.current_epoch - self.bucsfr_warmup_epochs) % self.bucsfr_refresh_every:
+            return
+        self._refresh_bucsfr_dendrogram()
+
     def _multi_views(self, images: torch.Tensor):
         """Encode a (B, V, C, H, W) batch into the view-0 embedding plus the
         full (B, V, D) view stack used for the augmentation-averaged positive
@@ -249,7 +329,7 @@ class ContrastiveExperiment(pl.LightningModule):
         # Grafit's memory bank additionally appends the dataset index, which
         # only the train dataset yields.
         sample_idx = None
-        if self.grafit_bank is not None and self.training:
+        if (self.grafit_bank is not None or self.bucsfr) and self.training:
             *batch, sample_idx = batch
         if len(batch) == 3:
             images, labels, test_labels = batch
@@ -313,6 +393,21 @@ class ContrastiveExperiment(pl.LightningModule):
                 temperature=self.temperature,
                 soft_temperature=self.maskcon_soft_temperature,
                 w=self.maskcon_w, queue=self.maskcon_queue,
+                update_queue=self.training)
+        elif self.bucsfr:
+            # Same query / momentum-key pair as MaskCon; the dendrogram built
+            # at the start of the epoch selects the positives and negatives.
+            embeddings, keys = self._maskcon_views(images)
+            loss_dict = self.model.bucsfr_loss_function(
+                embeddings, labels, keys=keys,
+                temperature=self.temperature,
+                alpha=self.bucsfr_alpha,
+                cluster_labels=self._bucsfr_cluster_labels(sample_idx),
+                centroids=(self._bucsfr_clusters["centroids"]
+                           if self._bucsfr_clusters else None),
+                density=(self._bucsfr_clusters["density"]
+                         if self._bucsfr_clusters else None),
+                queue=self.bucsfr_queue,
                 update_queue=self.training)
         elif self.infonce_softpos:
             embeddings = self.model(images)

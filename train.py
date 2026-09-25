@@ -418,6 +418,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--maskcon_queue_size", type=int, default=4096,
                         help="Size of MaskCon's momentum-key queue. 0 falls back to "
                              "the in-batch keys. Default: 4096")
+    parser.add_argument("--bucsfr", action="store_true",
+                        help="Use the BuCSFR loss (Shi et al., ICCV 2025): MoCo-style "
+                             "contrastive learning whose positives/negatives are "
+                             "selected from a dendrogram built bottom-up inside each "
+                             "coarse class, plus a coarse classification term. Needs "
+                             "multi-view batches (--grafit_views) and adds a momentum "
+                             "encoder (--EMA_momentum).")
+    parser.add_argument("--bucsfr_alpha", type=float, default=0.5,
+                        help="BuCSFR weight of the contrastive term in "
+                             "alpha*L_con + (1-alpha)*L_ce. Default: 0.5")
+    parser.add_argument("--bucsfr_queue_size", type=int, default=4096,
+                        help="Size of BuCSFR's momentum-key queue (the instance "
+                             "selection candidates). Default: 4096")
+    parser.add_argument("--bucsfr_clusters_per_class", type=int, default=20,
+                        help="Initial dendrogram leaves per coarse class; the paper "
+                             "recommends 3-4x the expected number of fine-grained "
+                             "classes. Default: 20")
+    parser.add_argument("--bucsfr_threshold", type=float, default=1.1,
+                        help="BuCSFR merge threshold T: a cluster pair is merged when "
+                             "min(L_j,L_k)/I_jk < T (smaller = merge less eagerly, "
+                             "recommended for fine-grained datasets). Default: 1.1")
+    parser.add_argument("--bucsfr_warmup_epochs", type=int, default=10,
+                        help="Epochs of plain MoCo training before the first "
+                             "dendrogram is built. Default: 10")
+    parser.add_argument("--bucsfr_refresh_every", type=int, default=1,
+                        help="Rebuild the dendrogram (and merge one pair per coarse "
+                             "class) every N epochs after warmup. Default: 1")
     parser.add_argument("--cross_entropy", action="store_true",
                         help="Supervised cross-entropy baseline: train a linear "
                              "classifier on the (normalized) embedding over the "
@@ -575,8 +602,9 @@ def main() -> None:
     supcon_inst = args.supcon_soft_pos_loss and args.supcon_inst
     use_instance_term = args.grafit or supcon_inst
     grafit_views = args.grafit_views if (
-        use_instance_term or args.taxocon_aug or args.maskcon) else 0
-    grafit_bank = args.grafit and args.grafit_bank
+        use_instance_term or args.taxocon_aug or args.maskcon or args.bucsfr) else 0
+    # BuCSFR needs the dataset index to look up each sample's dendrogram cluster.
+    grafit_bank = (args.grafit and args.grafit_bank) or args.bucsfr
 
     if is_contrastive:
         # DINOv2 expects 3-channel, patch14-compatible inputs. Force a valid
@@ -674,8 +702,9 @@ def main() -> None:
         grafit_bank_size = 0
         if args.cross_entropy or grafit_bank:
             datamodule.setup()
-            grafit_bank_size = len(datamodule.train_dataset) if grafit_bank else 0
-        if args.cross_entropy:
+            grafit_bank_size = (len(datamodule.train_dataset)
+                                if (args.grafit and args.grafit_bank) else 0)
+        if args.cross_entropy or args.bucsfr:
             num_classes = (datamodule.num_train_classes
                            if args.dataset in ("inat", "aircraft")
                            else datamodule.num_classes)
@@ -703,7 +732,7 @@ def main() -> None:
                 sinkhorn_iters=args.sinkhorn_iters,
                 grad_checkpointing=args.grad_checkpointing,
                 num_classes=num_classes,
-                cross_entropy=args.cross_entropy,
+                cross_entropy=args.cross_entropy or args.bucsfr,
                 grafit_predictor=use_instance_term,
             )
         else:
@@ -733,7 +762,7 @@ def main() -> None:
                 sinkhorn_iters=args.sinkhorn_iters,
                 grad_checkpointing=args.grad_checkpointing,
                 num_classes=num_classes,
-                cross_entropy=args.cross_entropy,
+                cross_entropy=args.cross_entropy or args.bucsfr,
                 grafit_predictor=use_instance_term,
             )
 
@@ -779,6 +808,13 @@ def main() -> None:
                 maskcon_w=args.maskcon_w,
                 maskcon_soft_temperature=args.maskcon_soft_tau,
                 maskcon_queue_size=args.maskcon_queue_size,
+                bucsfr=args.bucsfr,
+                bucsfr_alpha=args.bucsfr_alpha,
+                bucsfr_queue_size=args.bucsfr_queue_size,
+                bucsfr_clusters_per_class=args.bucsfr_clusters_per_class,
+                bucsfr_threshold=args.bucsfr_threshold,
+                bucsfr_warmup_epochs=args.bucsfr_warmup_epochs,
+                bucsfr_refresh_every=args.bucsfr_refresh_every,
                 infonce_softpos=args.infonce_softpos,
                 supcon_softpos=args.supcon_soft_pos_loss,
                 supcon_inst=supcon_inst,
@@ -911,6 +947,12 @@ def main() -> None:
                 f"-Q{args.maskcon_queue_size}-Views{args.grafit_views}"
                 f"-M{args.EMA_momentum}"
             ) if args.maskcon else ""
+            bucsfr_tag = (
+                f"_BuCSFR-A{args.bucsfr_alpha}-C{args.bucsfr_clusters_per_class}"
+                f"-T{args.bucsfr_threshold}-W{args.bucsfr_warmup_epochs}"
+                f"-Q{args.bucsfr_queue_size}-Views{args.grafit_views}"
+                f"-M{args.EMA_momentum}"
+            ) if args.bucsfr else ""
             infonce_softpos_tag = (
                 f"_InfoNCESoftPos-Tau{args.pos_weight_tau}"
                 f"{'-NoPosWeight' + str(args.no_pos_weight_epoch) if args.no_pos_weight_epoch else ''}"
@@ -948,6 +990,7 @@ def main() -> None:
                 f"{ms_loss_tag}"
                 f"{grafit_tag}"
                 f"{maskcon_tag}"
+                f"{bucsfr_tag}"
                 f"{cross_entropy_tag}"
                 f"{infonce_softpos_tag}"
                 f"{supcon_softpos_tag}"

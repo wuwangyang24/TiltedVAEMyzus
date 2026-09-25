@@ -10,6 +10,7 @@ from .vanilla_supcon import vanilla_supcon_loss
 from .ms_loss import multi_similarity_loss
 from .grafit import grafit_loss, GrafitMemoryBank, byol_instance_loss
 from .maskcon import maskcon_loss, MaskConQueue
+from .bucsfr import bucsfr_loss, BuCSFRDendrogram
 from .lejepa import lejepa_loss
 from .utils import sigreg_loss, batch_knn_accuracy, gaussianity_metrics
 
@@ -30,6 +31,8 @@ __all__ = [
     "byol_instance_loss",
     "maskcon_loss",
     "MaskConQueue",
+    "bucsfr_loss",
+    "BuCSFRDendrogram",
     "lejepa_loss",
     "sigreg_loss",
     "batch_knn_accuracy",

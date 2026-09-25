@@ -11,6 +11,7 @@ from Loss import (
     lejepa_loss, sigreg_loss, batch_knn_accuracy, gaussianity_metrics,
     vanilla_dcl_loss, infonce_softpos_loss, SupConSoftPosLoss, TaxoConAugLoss,
     vanilla_supcon_loss, multi_similarity_loss, grafit_loss, maskcon_loss,
+    bucsfr_loss,
 )
 
 try:
@@ -333,11 +334,22 @@ class DinoV2LoRA(nn.Module):
         kwargs.setdefault("temperature", self.temperature)
         return maskcon_loss(embeddings, labels, **kwargs)
 
+    def bucsfr_loss_function(
+        self, embeddings: Tensor, labels: Tensor, **kwargs,
+    ) -> Dict[str, Tensor]:
+        kwargs.setdefault("temperature", self.temperature)
+        kwargs.setdefault("class_logits", self.classify(embeddings))
+        return bucsfr_loss(embeddings, labels, **kwargs)
+
     def infonce_softpos_loss_function(
         self, embeddings: Tensor, labels: Tensor, **kwargs,
     ) -> Dict[str, Tensor]:
         kwargs.setdefault("temperature", self.temperature)
         return infonce_softpos_loss(embeddings, labels, **kwargs)
+
+    def classify(self, embeddings: Tensor) -> Optional[Tensor]:
+        """Coarse-class logits, or None when the model has no classifier head."""
+        return None if self.classifier is None else self.classifier(embeddings)
 
     def ce_loss_function(
         self, embeddings: Tensor, labels: Tensor, **kwargs,
