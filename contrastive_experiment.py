@@ -7,21 +7,18 @@ import torch
 import torch.nn.functional as F
 import pytorch_lightning as pl
 
-from Models import DinoV2LoRA
+from Models import Backbone
 from Loss import (
     BuCSFRDendrogram, GrafitMemoryBank, MaskConQueue, multiview_similarity,
 )
 
 
 class ContrastiveExperiment(pl.LightningModule):
-    """LightningModule wrapping the DINOv2+LoRA model for supervised contrastive
+    """LightningModule wrapping the backbone model for supervised contrastive
     (InfoNCE / SupCon) training on synthesis-program labels.
 
-    Only the LoRA adapters and the projection head are optimized; the DINOv2
-    backbone stays frozen.
-
     Args:
-        model: the :class:`DinoV2LoRA` model to train.
+        model: the :class:`Backbone` model to train.
         lr: learning rate for the AdamW optimizer.
         weight_decay: L2 weight decay for the optimizer.
         temperature: softmax temperature for the contrastive loss.
@@ -29,7 +26,7 @@ class ContrastiveExperiment(pl.LightningModule):
     """
 
     def __init__(self,
-                 model: DinoV2LoRA,
+                 model: Backbone,
                  lr: float = 1e-4,
                  weight_decay: float = 1e-4,
                  temperature: float = 0.1,
@@ -744,16 +741,15 @@ class ContrastiveExperiment(pl.LightningModule):
 
 
 class LeJEPAExperiment(pl.LightningModule):
-    """LightningModule training the DINOv2+LoRA model with the LeJEPA
+    """LightningModule training the backbone model with the LeJEPA
     self-supervised objective (Balestriero & LeCun, 2025).
 
     Instead of supervised contrastive learning, this optimizes a label-free
     loss: a prediction/invariance term over multiple augmented views plus the
     SIGReg isotropic-Gaussian regularizer that prevents representation collapse.
-    Only the LoRA adapters and projection head are trained.
 
     Args:
-        model: the :class:`DinoV2LoRA` model to train.
+        model: the :class:`Backbone` model to train.
         lr: learning rate for the AdamW optimizer.
         weight_decay: L2 weight decay for the optimizer.
         sigreg_weight: weight of the SIGReg term relative to the prediction term.
@@ -766,7 +762,7 @@ class LeJEPAExperiment(pl.LightningModule):
     """
 
     def __init__(self,
-                 model: DinoV2LoRA,
+                 model: Backbone,
                  lr: float = 1e-4,
                  weight_decay: float = 1e-4,
                  sigreg_weight: float = 0.05,

@@ -197,7 +197,7 @@ class VAEExperiment(pl.LightningModule):
         if not hasattr(self.logger, "experiment"):
             return
 
-        # DINO-based models output embeddings, not images — skip image logging.
+        # Contrastive models output embeddings, not images — skip image logging.
         # Fetch a fixed batch once and reuse it, so we don't rebuild the val
         # DataLoader (and re-spawn workers) on every validation epoch.
         if self._log_images_batch is None:

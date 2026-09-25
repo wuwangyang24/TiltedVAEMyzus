@@ -147,7 +147,7 @@ class BestValLossReporter(Callback):
             except Exception as e:  # noqa: BLE001 - reporting must not break training
                 print(f"[report] skipped Excel workbook generation: {e}")
 
-from Models import VAE, TiltedVAE, DinoV2LoRA, Backbone
+from Models import VAE, TiltedVAE, Backbone
 from dataset import (VAEDataModule, ContrastiveDataModule, InatDataModule,
                      FGVCAircraftDataModule)
 from experiment import VAEExperiment
@@ -201,7 +201,7 @@ def parse_args() -> argparse.Namespace:
                         help="Download the FGVC-Aircraft archive if it is missing")
     parser.add_argument("--data_dir", type=str, default=None,
                         help="Path to the image dataset (any nested folder layout). "
-                             "Required for the VAE models; ignored for --model dino_lora, "
+                             "Required for the VAE models; ignored for --model backbone, "
                              "which uses --contrastive_metadata instead.")
     parser.add_argument("--img_size", type=int, default=96, help="Square image size")
     parser.add_argument("--batch_size", type=int, default=64)
@@ -216,13 +216,11 @@ def parse_args() -> argparse.Namespace:
 
     # Model
     parser.add_argument("--model", type=str, default="vae",
-                        choices=["vae", "tilted", "dino_lora", "backbone"],
+                        choices=["vae", "tilted", "backbone"],
                         help="Which model to train: 'vae' (standard VAE), "
                              "'tilted' (TiltedVAE with an exponentially tilted prior), "
-                             "'dino_lora' (LoRA-adapted DINOv2 trained with a "
-                             "supervised InfoNCE/SupCon loss over synthesis programs), "
-                             "or 'backbone' (a fully fine-tuned backbone trained with the "
-                             "same supervised contrastive losses, no LoRA; pick the "
+                             "or 'backbone' (a fully fine-tuned backbone trained with "
+                             "supervised contrastive losses; pick the "
                              "architecture with --backbone)")
     parser.add_argument("--in_channels", type=int, default=3)
     parser.add_argument("--latent_dim", type=int, default=128)
@@ -230,12 +228,7 @@ def parse_args() -> argparse.Namespace:
                         help="Tilt parameter for the TiltedVAE prior (only used when "
                              "--model tilted). Defaults to sqrt(2 * latent_dim)")
 
-    # DINOv2 + LoRA contrastive model (only used when --model dino_lora)
-    parser.add_argument("--dino_backbone", type=str, default="vit_small_patch14_dinov2",
-                        choices=["vit_small_patch14_dinov2",
-                                 "vit_base_patch14_dinov2",
-                                 "vit_large_patch14_dinov2"],
-                        help="DINOv2 backbone variant to adapt with LoRA")
+    # Contrastive model (only used when --model backbone)
     parser.add_argument("--backbone", type=str, default="resnet18",
                         choices=["resnet18", "resnet50", "vit_small_patch16_224",
                                  "swin_tiny_patch4_window7_224", "convnext_tiny"],
@@ -246,13 +239,6 @@ def parse_args() -> argparse.Namespace:
                         help="Projected embedding dimension for the contrastive head")
     parser.add_argument("--proj_hidden_dim", type=int, default=2048,
                         help="Hidden width of the 2-layer projection MLP")
-    parser.add_argument("--lora_rank", type=int, default=8, help="LoRA rank")
-    parser.add_argument("--lora_alpha", type=int, default=16, help="LoRA scaling alpha")
-    parser.add_argument("--lora_dropout", type=float, default=0.0,
-                        help="Dropout applied to the LoRA input")
-    parser.add_argument("--lora_targets", type=str, nargs="*", default=["qkv"],
-                        help="Leaf module names in the backbone to adapt with LoRA "
-                             "(e.g. qkv proj)")
     parser.add_argument("--temperature", type=float, default=0.1,
                         help="Softmax temperature for the InfoNCE/SupCon loss")
     parser.add_argument("--use_proj_head", action="store_true",
@@ -261,19 +247,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--grad_checkpointing", action="store_true",
                         help="Enable gradient (activation) checkpointing on the backbone "
                              "to trade extra compute for lower memory (allows larger "
-                             "batches). Only used with --model backbone or dino_lora.")
+                             "batches). Only used with --model backbone.")
 
-    # Contrastive dataset (synthesis-program labels; only used when --model dino_lora)
+    # Contrastive dataset (synthesis-program labels; only used when --model backbone)
     parser.add_argument("--contrastive_metadata", type=str, nargs="+", default=None,
                         help="JSON metadata (compounds -> plates -> image paths) for "
                              "the contrastive dataset. Multiple files can be provided "
-                             "and will be merged. Required for --model dino_lora.")
+                             "and will be merged. Required for --model backbone.")
     parser.add_argument("--contrastive_labels", type=str, default=None,
                         help="CSV/Excel mapping compounds to synthesis-program labels. "
-                             "Required for --model dino_lora.")
+                             "Required for --model backbone.")
     parser.add_argument("--contrastive_root_dir", type=str, default=None,
                         help="Root directory prepended to image paths in the JSON. "
-                             "Required for --model dino_lora.")
+                             "Required for --model backbone.")
     parser.add_argument("--contrastive_compound_col", type=str, default="compound",
                         help="Compound-ID column in the label CSV. Default: compound")
     parser.add_argument("--contrastive_label_col", type=str, default="synthesis_program",
@@ -478,9 +464,9 @@ def parse_args() -> argparse.Namespace:
                              "--EMA_pos_weight is set (ema = m*ema + (1-m)*online). "
                              "Default: 0.999")
 
-    # LeJEPA self-supervised training (only used when --model dino_lora)
+    # LeJEPA self-supervised training (only used when --model backbone)
     parser.add_argument("--ssl_lejepa", action="store_true",
-                        help="Train the DINOv2+LoRA model with the label-free LeJEPA "
+                        help="Train the backbone model with the label-free LeJEPA "
                              "self-supervised objective (multi-view prediction + SIGReg) "
                              "instead of supervised contrastive learning.")
     parser.add_argument("--ssl_views", type=int, default=2,
@@ -587,9 +573,7 @@ def main() -> None:
     if not args.deterministic:
         torch.backends.cudnn.benchmark = True
 
-    is_dino = args.model == "dino_lora"
-    is_backbone = args.model == "backbone"
-    is_contrastive = is_dino or is_backbone
+    is_contrastive = args.model == "backbone"
 
     if args.taxocon_aug and args.supcon_soft_pos_loss:
         raise ValueError(
@@ -607,13 +591,6 @@ def main() -> None:
     grafit_bank = (args.grafit and args.grafit_bank) or args.bucsfr
 
     if is_contrastive:
-        # DINOv2 expects 3-channel, patch14-compatible inputs. Force a valid
-        # image size (multiple of 14) and RGB regardless of the VAE defaults.
-        # The fully fine-tuned backbones handle their own sizing, so only the
-        # DINOv2 path is constrained here.
-        if is_dino and args.img_size % 14 != 0:
-            args.img_size = 224
-            print(f"[dino_lora] img_size must be a multiple of 14; using {args.img_size}")
         args.in_channels = 3
 
         if args.dataset == "inat":
@@ -662,7 +639,7 @@ def main() -> None:
             ) if not val]
             if missing:
                 raise ValueError(
-                    f"--model dino_lora requires {', '.join(missing)} to build the "
+                    f"--model backbone requires {', '.join(missing)} to build the "
                     "synthesis-program-labelled contrastive dataset."
                 )
 
@@ -709,66 +686,33 @@ def main() -> None:
                            if args.dataset in ("inat", "aircraft")
                            else datamodule.num_classes)
 
-        if is_backbone:
-            model = Backbone(
-                backbone=args.backbone,
-                img_size=args.img_size,
-                embedding_dim=args.embedding_dim,
-                proj_hidden_dim=args.proj_hidden_dim,
-                temperature=args.temperature,
-                use_proj_head=args.use_proj_head,
-                dcl_ema_momentum=args.dcl_ema_momentum,
-                dcl_suspicion_tau=args.dcl_suspicion_tau,
-                dcl_suspicion_bias=args.dcl_suspicion_bias,
-                dcl_suspicion_standardize=args.dcl_suspicion_standardize,
-                dcl_normal=args.normal_dcl,
-                dcl_soft_pos=args.dcl_soft_pos_loss,
-                dcl_soft_pos_tau=args.dcl_soft_pos_tau,
-                supcon_soft_pos=args.supcon_soft_pos_loss,
-                supcon_soft_pos_tau=args.supcon_soft_pos_tau,
-                supcon_denom_pos_weight=args.denominator_pos_weight,
-                taxocon_aug=args.taxocon_aug,
-                sinkhorn=args.sinkhorn,
-                sinkhorn_iters=args.sinkhorn_iters,
-                grad_checkpointing=args.grad_checkpointing,
-                num_classes=num_classes,
-                cross_entropy=args.cross_entropy or args.bucsfr,
-                grafit_predictor=use_instance_term,
-            )
-        else:
-            model = DinoV2LoRA(
-                backbone=args.dino_backbone,
-                img_size=args.img_size,
-                embedding_dim=args.embedding_dim,
-                proj_hidden_dim=args.proj_hidden_dim,
-                lora_rank=args.lora_rank,
-                lora_alpha=args.lora_alpha,
-                lora_dropout=args.lora_dropout,
-                lora_targets=args.lora_targets,
-                temperature=args.temperature,
-                use_proj_head=args.use_proj_head,
-                dcl_ema_momentum=args.dcl_ema_momentum,
-                dcl_suspicion_tau=args.dcl_suspicion_tau,
-                dcl_suspicion_bias=args.dcl_suspicion_bias,
-                dcl_suspicion_standardize=args.dcl_suspicion_standardize,
-                dcl_normal=args.normal_dcl,
-                dcl_soft_pos=args.dcl_soft_pos_loss,
-                dcl_soft_pos_tau=args.dcl_soft_pos_tau,
-                supcon_soft_pos=args.supcon_soft_pos_loss,
-                supcon_soft_pos_tau=args.supcon_soft_pos_tau,
-                supcon_denom_pos_weight=args.denominator_pos_weight,
-                taxocon_aug=args.taxocon_aug,
-                sinkhorn=args.sinkhorn,
-                sinkhorn_iters=args.sinkhorn_iters,
-                grad_checkpointing=args.grad_checkpointing,
-                num_classes=num_classes,
-                cross_entropy=args.cross_entropy or args.bucsfr,
-                grafit_predictor=use_instance_term,
-            )
+        model = Backbone(
+            backbone=args.backbone,
+            img_size=args.img_size,
+            embedding_dim=args.embedding_dim,
+            proj_hidden_dim=args.proj_hidden_dim,
+            temperature=args.temperature,
+            use_proj_head=args.use_proj_head,
+            dcl_ema_momentum=args.dcl_ema_momentum,
+            dcl_suspicion_tau=args.dcl_suspicion_tau,
+            dcl_suspicion_bias=args.dcl_suspicion_bias,
+            dcl_suspicion_standardize=args.dcl_suspicion_standardize,
+            dcl_normal=args.normal_dcl,
+            dcl_soft_pos=args.dcl_soft_pos_loss,
+            dcl_soft_pos_tau=args.dcl_soft_pos_tau,
+            supcon_soft_pos=args.supcon_soft_pos_loss,
+            supcon_soft_pos_tau=args.supcon_soft_pos_tau,
+            supcon_denom_pos_weight=args.denominator_pos_weight,
+            taxocon_aug=args.taxocon_aug,
+            sinkhorn=args.sinkhorn,
+            sinkhorn_iters=args.sinkhorn_iters,
+            grad_checkpointing=args.grad_checkpointing,
+            num_classes=num_classes,
+            cross_entropy=args.cross_entropy or args.bucsfr,
+            grafit_predictor=use_instance_term,
+        )
 
         if args.ssl_lejepa:
-            if not is_dino:
-                raise ValueError("--ssl_lejepa is only supported with --model dino_lora.")
             experiment = LeJEPAExperiment(
                 model=model,
                 lr=args.lr,
@@ -892,22 +836,15 @@ def main() -> None:
                 dataset_tag += f"_{args.superclass}"
         elif args.dataset == "aircraft":
             dataset_tag = f"_aircraft_{args.train_cat}->{test_cat_tag}"
-        if is_backbone:
-            # "FFT" = full fine-tuning; short per-architecture tag.
-            backbone_tag = {
-                "resnet18": "ResNet18",
-                "resnet50": "ResNet50",
-                "vit_small_patch16_224": "ViTs16",
-                "swin_tiny_patch4_window7_224": "SwinT",
-                "convnext_tiny": "ConvNeXtT",
-            }.get(args.backbone, args.backbone)
-            model_prefix = f"FFT_{backbone_tag}"
-        else:
-            targets_tag = "_".join(args.lora_targets)
-            model_prefix = (
-                f"DINO_LoRA_{targets_tag}"
-                f"_R{args.lora_rank}_A{args.lora_alpha}_D{args.lora_dropout}"
-            )
+        # "FFT" = full fine-tuning; short per-architecture tag.
+        backbone_tag = {
+            "resnet18": "ResNet18",
+            "resnet50": "ResNet50",
+            "vit_small_patch16_224": "ViTs16",
+            "swin_tiny_patch4_window7_224": "SwinT",
+            "convnext_tiny": "ConvNeXtT",
+        }.get(args.backbone, args.backbone)
+        model_prefix = f"FFT_{backbone_tag}"
         if args.ssl_lejepa:
             cv_tag = "_CompViews" if args.ssl_compound_views else ""
             aug_tag = (f"_Aug-R{args.ssl_rotation:.0f}T{args.ssl_translate}"
@@ -1070,15 +1007,12 @@ def main() -> None:
             pos_weight_tau = "n/a"
 
         # Organise reports under <model>/<dataset>/ (e.g. resnet18/mammals/).
-        if is_backbone:
-            model_folder = {
-                "resnet18": "resnet18",
-                "resnet50": "resnet50",
-                "vit_small_patch16_224": "vits16",
-                "swin_tiny_patch4_window7_224": "swint",
-            }.get(args.backbone, args.backbone)
-        else:
-            model_folder = "dino_lora"
+        model_folder = {
+            "resnet18": "resnet18",
+            "resnet50": "resnet50",
+            "vit_small_patch16_224": "vits16",
+            "swin_tiny_patch4_window7_224": "swint",
+        }.get(args.backbone, args.backbone)
         if args.dataset == "inat":
             dataset_folder = args.superclass or f"{args.train_cat}_to_{'-'.join(args.test_cat)}"
         elif args.dataset == "aircraft":

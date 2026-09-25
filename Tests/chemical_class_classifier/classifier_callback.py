@@ -42,8 +42,8 @@ from classifier_utils import (
     build_label_encoder,
 )
 
-# ImageNet normalization stats for DINOv2-based models (embedding models that
-# expect normalized inputs rather than raw [0, 1] pixels).
+# ImageNet normalization stats for pretrained-backbone models (embedding models
+# that expect normalized inputs rather than raw [0, 1] pixels).
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
@@ -115,7 +115,7 @@ def _encode_paths(
         if batch is None:
             continue
         batch = batch.to(device, non_blocking=True)
-        # VAE encoders return (mu, log_var); embedding models (e.g. DINOv2+LoRA)
+        # VAE encoders return (mu, log_var); contrastive embedding models
         # return a single feature tensor. Support both.
         out = model.encode(batch)
         feats = out[0] if isinstance(out, (tuple, list)) else out

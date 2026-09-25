@@ -30,7 +30,7 @@ USE_BANK="${USE_BANK:-1}"               # 1 = memory-bank L_knn (as in the paper
 TEMPERATURE="${TEMPERATURE:-0.05}"      # NCA sigma; the paper uses 0.05
 EMA_MOMENTUM="${EMA_MOMENTUM:-0.996}"   # momentum of the BYOL target network
 
-MODEL="${MODEL:-backbone}"              # backbone | dino_lora
+MODEL="${MODEL:-backbone}"              # backbone
 BACKBONE="${BACKBONE:-vit_small_patch16_224}"
 IMG_SIZE="${IMG_SIZE:-224}"
 LR="${LR:-1e-4}"
@@ -69,11 +69,7 @@ COMMON=(
   --grad_checkpointing
 )
 
-if [[ "$MODEL" == "backbone" ]]; then
-  COMMON+=(--backbone "$BACKBONE")
-else
-  COMMON+=(--dino_backbone "$BACKBONE")
-fi
+COMMON+=(--backbone "$BACKBONE")
 
 case "$DATASET" in
   aircraft)

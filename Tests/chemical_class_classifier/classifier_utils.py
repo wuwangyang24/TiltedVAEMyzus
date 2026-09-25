@@ -1,7 +1,6 @@
 """classifier_utils.py
 
-Shared utilities for the CatBoost chemical-class classifier (ported from the
-MyzusDINOAdapt synthesis-program classifier, trimmed to the CatBoost path):
+Shared utilities for the CatBoost chemical-class classifier:
   - Per-compound mean-latent feature builder
   - Rare-class filtering & label encoding
   - Result saving (top-1 / top-k reports, confusion matrices, predictions CSV)

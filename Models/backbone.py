@@ -31,10 +31,10 @@ class Backbone(nn.Module):
     """Fully fine-tuned convolutional / ViT backbone with an optional projection
     head for supervised contrastive (InfoNCE / SupCon) representation learning.
 
-    Unlike :class:`DinoV2LoRA`, the entire backbone is trainable (full
-    fine-tuning, no LoRA). ``forward`` returns L2-normalized embeddings suitable
-    for a cosine-similarity contrastive objective, so this model is a drop-in
-    replacement inside :class:`ContrastiveExperiment`.
+    The entire backbone is trainable (full fine-tuning). ``forward`` returns
+    L2-normalized embeddings suitable for a cosine-similarity contrastive
+    objective, so this model plugs directly into
+    :class:`ContrastiveExperiment`.
 
     Despite the class name, the ``backbone`` argument selects which timm model to
     fine-tune (``resnet18``, ``resnet50``, ``vit_small_patch16_224``,

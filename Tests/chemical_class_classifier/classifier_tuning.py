@@ -1,7 +1,7 @@
 """classifier_tuning.py
 
 Randomized hyperparameter search for the CatBoost chemical-class classifier
-(ported from the MyzusDINOAdapt synthesis-program classifier, CatBoost only).
+(synthesis-program classifier, CatBoost only).
 """
 
 import argparse

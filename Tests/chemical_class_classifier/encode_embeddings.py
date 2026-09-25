@@ -5,8 +5,7 @@ Encode compound images with a trained TiltedVAE / VAE encoder into the
 per-compound / per-plate embedding structure consumed by
 ``train_chemical_class_classifier.py``.
 
-Adapted from the MyzusDINOAdapt ``encode_embeddings.py`` (custom-VAE path) to
-use this repository's own ``Models`` (``VAE`` / ``TiltedVAE``) and its image
+Uses this repository's own ``Models`` (``VAE`` / ``TiltedVAE``) and its image
 preprocessing (square resize to ``img_size``, pixels in ``[0, 1]``).
 
 For each compound and each plate:
@@ -38,7 +37,7 @@ Output .pt file structure (dict):
     }
 
 Usage:
-python TiltedVAEMyzus/Tests/chemical_class_classifier/encode_embeddings.py --metadata METADATA/metadata_compound_all100ppm.json --root_dir DATA_TEST/ --output results/checkpoints/DINO_LoRA_qkv_proj_R32_A64_P80_K8_NoProj_T0.1_Comp/embeddings_best_knn.pt --checkpoint 'results/checkpoints/DINO_LoRA_qkv_proj_R32_A64_P80_K8_NoProj_T0.1_Comp/dino_lora-best-knn-epoch=06-val_batch_knn_acc=0.4330.ckpt' --lora_rank 32 --lora_alpha 64 --lora_targets qkv proj --no_proj_head --img_size 224 --device cuda --compound_col compound --label_col synthesis_program --min_compounds_per_class 30 --filter_by_efficacy 0 --class_metadata METADATA/synthesisprogram_compoundno.csv
+python TiltedVAEMyzus/Tests/chemical_class_classifier/encode_embeddings.py --metadata METADATA/metadata_compound_all100ppm.json --root_dir DATA_TEST/ --output results/embeddings_best_knn.pt --checkpoint 'results/checkpoints/tilted-latent128/best.ckpt' --model tilted --latent_dim 128 --img_size 96 --device cuda --compound_col compound --label_col synthesis_program --min_compounds_per_class 30 --filter_by_efficacy 0 --class_metadata METADATA/synthesisprogram_compoundno.csv
 """
 
 import argparse
@@ -62,20 +61,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from Models import VAE, TiltedVAE, DinoV2LoRA
-
-
-class DinoV2Wrapper(torch.nn.Module):
-    """Thin wrapper around a pretrained DINOv2 backbone that exposes an
-    ``.encode()`` method compatible with VAE/TiltedVAE."""
-
-    def __init__(self, model_name: str = "dinov2_vits14"):
-        super().__init__()
-        self.backbone = torch.hub.load("facebookresearch/dinov2", model_name)
-
-    def encode(self, x: torch.Tensor):
-        features = self.backbone(x)          # (B, D)  D=384 for vits14
-        return features, None                # no log_var
+from Models import VAE, TiltedVAE
 
 
 def parse_args() -> argparse.Namespace:
@@ -90,40 +76,16 @@ def parse_args() -> argparse.Namespace:
                    help="Output .pt path for the encoded embeddings")
 
     # Model / checkpoint
-    p.add_argument("--checkpoint", default=None,
-                   help="Trained Lightning checkpoint (.ckpt) or raw state_dict (.pt/.pth). "
-                        "Not required for --model dino.")
-    p.add_argument("--model", default="tilted", choices=["vae", "tilted", "dino", "dino_lora"],
-                   help="Model architecture. 'dino' uses pretrained DINOv2 vits14. "
-                        "'dino_lora' uses DinoV2LoRA with a checkpoint. Default: tilted")
+    p.add_argument("--checkpoint", required=True,
+                   help="Trained Lightning checkpoint (.ckpt) or raw state_dict (.pt/.pth).")
+    p.add_argument("--model", default="tilted", choices=["vae", "tilted"],
+                   help="Model architecture. Default: tilted")
     p.add_argument("--in_channels", type=int, default=3)
     p.add_argument("--latent_dim", type=int, default=128)
     p.add_argument("--img_size", type=int, default=96,
-                   help="Image size for VAE/TiltedVAE. Ignored for dino (uses 224). "
-                        "For dino_lora must be a multiple of 14 (default 224).")
+                   help="Image size for VAE/TiltedVAE.")
     p.add_argument("--tau", type=float, default=None,
                    help="Tilt parameter for TiltedVAE (only used with --model tilted)")
-
-    # DinoV2LoRA-specific arguments
-    p.add_argument("--dino_backbone", type=str, default="vit_small_patch14_dinov2",
-                   help="DINOv2 backbone variant for dino_lora")
-    p.add_argument("--embedding_dim", type=int, default=256,
-                   help="Output embedding dimension for dino_lora")
-    p.add_argument("--proj_hidden_dim", type=int, default=2048,
-                   help="Projection head hidden dim for dino_lora")
-    p.add_argument("--lora_rank", type=int, default=8, help="LoRA rank")
-    p.add_argument("--lora_alpha", type=int, default=16, help="LoRA alpha")
-    p.add_argument("--lora_dropout", type=float, default=0.0)
-    p.add_argument("--lora_targets", type=str, nargs="+", default=["qkv"],
-                   help="Leaf module names to adapt with LoRA")
-    p.add_argument("--use_proj_head", action="store_true", default=True,
-                   help="Use projection head (default: True)")
-    p.add_argument("--no_proj_head", action="store_true",
-                   help="Disable projection head (output backbone features directly)")
-    p.add_argument("--raw_embeddings", action="store_true",
-                   help="Output un-normalized embeddings (dino_lora only). Recommended "
-                        "for LeJEPA/SSL checkpoints, whose SIGReg target lives in raw "
-                        "Euclidean space; the default L2-normalizes (for contrastive).")
 
     # Pre-filtering by class membership
     p.add_argument("--class_metadata", default=None,
@@ -149,33 +111,10 @@ def parse_args() -> argparse.Namespace:
 
     args = p.parse_args()
 
-    if args.model not in ("dino",) and args.checkpoint is None:
-        p.error("--checkpoint is required for --model vae/tilted/dino_lora")
-
-    if args.no_proj_head:
-        args.use_proj_head = False
-
-    if args.model == "dino_lora" and args.img_size % 14 != 0:
-        args.img_size = 224
-
     return args
 
 
 def build_model(args: argparse.Namespace) -> torch.nn.Module:
-    if args.model == "dino":
-        return DinoV2Wrapper()
-    if args.model == "dino_lora":
-        return DinoV2LoRA(
-            backbone=args.dino_backbone,
-            img_size=args.img_size,
-            embedding_dim=args.embedding_dim,
-            proj_hidden_dim=args.proj_hidden_dim,
-            lora_rank=args.lora_rank,
-            lora_alpha=args.lora_alpha,
-            lora_dropout=args.lora_dropout,
-            lora_targets=args.lora_targets,
-            use_proj_head=args.use_proj_head,
-        )
     if args.model == "tilted":
         return TiltedVAE(
             in_channels=args.in_channels,
@@ -214,7 +153,7 @@ def load_checkpoint(model: torch.nn.Module, ckpt_path: str) -> None:
 
 def _build_transform(img_size: int, imagenet_normalize: bool = False) -> T.Compose:
     """Square resize + scale to [0, 1].  Optionally add ImageNet normalization
-    (required for DINOv2)."""
+    (required for ImageNet-pretrained backbones)."""
     transforms = [
         T.Resize((img_size, img_size), antialias=True),
         T.ConvertImageDtype(torch.float32),
@@ -301,16 +240,8 @@ def main() -> None:
 
     # ── Build model ──────────────────────────────────────────────────────────
     model = build_model(args)
-    if args.model == "dino":
-        print("Model  : DINOv2 vits14  (pretrained, latent dim 384)")
-    elif args.model == "dino_lora":
-        load_checkpoint(model, args.checkpoint)
-        dim = args.embedding_dim if args.use_proj_head else "backbone"
-        print(f"Model  : DinoV2LoRA  (backbone={args.dino_backbone}, "
-              f"embedding_dim={dim}, img_size={args.img_size})")
-    else:
-        load_checkpoint(model, args.checkpoint)
-        print(f"Model  : {args.model}  (latent dim {args.latent_dim})")
+    load_checkpoint(model, args.checkpoint)
+    print(f"Model  : {args.model}  (latent dim {args.latent_dim})")
     model.to(device).eval()
     for param in model.parameters():
         param.requires_grad = False
@@ -318,14 +249,9 @@ def main() -> None:
         model = torch.compile(model)
 
     root_dir = Path(args.root_dir)
-    if args.model in ("dino", "dino_lora"):
-        img_size = args.img_size if args.model == "dino_lora" else 224
-        transform = _build_transform(img_size, imagenet_normalize=True)
-        mode = ImageReadMode.RGB
-    else:
-        img_size = args.img_size
-        transform = _build_transform(img_size)
-        mode = ImageReadMode.GRAY if args.in_channels == 1 else ImageReadMode.RGB
+    img_size = args.img_size
+    transform = _build_transform(img_size)
+    mode = ImageReadMode.GRAY if args.in_channels == 1 else ImageReadMode.RGB
 
     # ── Load metadata ────────────────────────────────────────────────────────
     with open(args.metadata) as f:
@@ -402,9 +328,7 @@ def main() -> None:
 
     # Encode everything in one pass
     all_latents: List[torch.Tensor] = []
-    # LeJEPA/SSL checkpoints keep raw (un-normalized) embeddings.
-    encode_kwargs = ({"normalize": False}
-                     if args.model == "dino_lora" and args.raw_embeddings else {})
+    encode_kwargs = {}
     with torch.no_grad():
         for batch in tqdm(loader, desc="Encoding"):
             if batch is None:

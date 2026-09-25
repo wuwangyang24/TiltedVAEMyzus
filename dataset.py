@@ -10,7 +10,7 @@ import pytorch_lightning as pl
 import torchvision.transforms as T
 from torchvision.io import ImageReadMode, read_image
 
-# DINOv2 was pretrained with ImageNet normalization statistics.
+# Backbones are pretrained with ImageNet normalization statistics.
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
 
@@ -236,7 +236,7 @@ class ContrastiveImageDataset(Dataset):
 
     Each item is ``(image_tensor, label_idx)`` where ``label_idx`` is the
     integer-encoded synthesis-program class. Images are resized, scaled to
-    ``[0, 1]``, and normalized with ImageNet statistics (matching DINOv2).
+    ``[0, 1]``, and normalized with ImageNet statistics.
 
     With ``num_views > 1`` the (stochastic) transform is drawn ``num_views``
     times per image and the item becomes ``([num_views, C, H, W], label_idx)``;
@@ -278,7 +278,7 @@ def build_ssl_transform(img_size: int, rotation: float = 30.0,
     framing/zoom, plus random rotation and translation, and Gaussian blur
     applied with probability ``gaussian_blur``. Drawing the transform ``V``
     times from the same image gives ``V`` correlated views. Output is a float
-    tensor normalized with ImageNet statistics (DINOv2).
+    tensor normalized with ImageNet statistics.
     """
     transforms = [
         T.RandomResizedCrop(
@@ -363,7 +363,7 @@ class CompoundViewDataset(Dataset):
 
 class ContrastiveDataModule(pl.LightningDataModule):
     """LightningDataModule serving synthesis-program-labelled images for
-    supervised contrastive (InfoNCE / SupCon) training of the DINOv2+LoRA model.
+    supervised contrastive (InfoNCE / SupCon) training of the backbone model.
 
     Labels are derived by joining an image-metadata JSON (compound -> plates ->
     image paths, same format as the classifier callback) with a label CSV/Excel
@@ -373,7 +373,7 @@ class ContrastiveDataModule(pl.LightningDataModule):
         image_metadata_json: JSON mapping compounds to plate/image paths.
         label_metadata_csv: CSV/Excel with compound -> synthesis-program labels.
         root_dir: base directory prepended to the relative image paths.
-        img_size: square image size (must be a multiple of the DINOv2 patch, 14).
+        img_size: square image size.
         batch_size: mini-batch size for both loaders.
         num_workers: DataLoader worker processes.
         val_split: fraction of images held out for validation.

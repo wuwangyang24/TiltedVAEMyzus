@@ -12,8 +12,7 @@ Usage:
         --val_image_dir inat2021 \
         --test_cat family \
         --superclass Insects \
-        --dino_backbone vit_small_patch14_dinov2 \
-        --lora_rank 8 --lora_alpha 16 --lora_targets qkv \
+        --backbone resnet50 \
         --img_size 224 --batch_size 128 --device cuda
 """
 
@@ -36,7 +35,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from Models import DinoV2LoRA
+from Models import Backbone
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
@@ -96,16 +95,12 @@ def parse_inat_json(
 
 # ── Model loading ────────────────────────────────────────────────────────────
 
-def load_model(args: argparse.Namespace) -> DinoV2LoRA:
-    model = DinoV2LoRA(
-        backbone=args.dino_backbone,
+def load_model(args: argparse.Namespace) -> Backbone:
+    model = Backbone(
+        backbone=args.backbone,
         img_size=args.img_size,
         embedding_dim=args.embedding_dim,
         proj_hidden_dim=args.proj_hidden_dim,
-        lora_rank=args.lora_rank,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        lora_targets=args.lora_targets,
         use_proj_head=args.use_proj_head,
     )
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
@@ -136,7 +131,7 @@ def load_model(args: argparse.Namespace) -> DinoV2LoRA:
 
 @torch.no_grad()
 def encode_dataset(
-    model: DinoV2LoRA, dataset: Dataset, batch_size: int,
+    model: Backbone, dataset: Dataset, batch_size: int,
     device: torch.device, num_workers: int = 4,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False,
@@ -208,14 +203,10 @@ def parse_args() -> argparse.Namespace:
                    help="Filter to this supercategory (e.g. Insects, Birds)")
 
     # Model architecture (must match checkpoint)
-    p.add_argument("--dino_backbone", default="vit_small_patch14_dinov2")
+    p.add_argument("--backbone", default="resnet50")
     p.add_argument("--img_size", type=int, default=224)
     p.add_argument("--embedding_dim", type=int, default=256)
     p.add_argument("--proj_hidden_dim", type=int, default=2048)
-    p.add_argument("--lora_rank", type=int, default=8)
-    p.add_argument("--lora_alpha", type=int, default=16)
-    p.add_argument("--lora_dropout", type=float, default=0.0)
-    p.add_argument("--lora_targets", type=str, nargs="*", default=["qkv"])
     p.add_argument("--use_proj_head", action="store_true")
 
     # Probe settings

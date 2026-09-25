@@ -12,7 +12,7 @@ Supports both pre-computed embeddings (from encode_embeddings.py) and on-the-fly
 encoding with a trained model checkpoint.
 
 Usage (pre-computed embeddings):
-python TiltedVAEMyzus/Tests/knn_acc_test.py --metadata METADATA/metadata_compound_all100ppm.json --embedding results/checkpoints/DINO_LoRA(qkv&proj)_R32_A64_P64_K8_NoProj_T0.05_Comp/best_val_knn_acc/embeddings_best_val_knn_acc.pt --n_compounds 50 --topk 1 5 10 --seed 42
+python TiltedVAEMyzus/Tests/knn_acc_test.py --metadata METADATA/metadata_compound_all100ppm.json --embedding results/checkpoints/FFT_ResNet50_P64_K8_NoProj_T0.05_Comp/best_val_knn_acc/embeddings_best_val_knn_acc.pt --n_compounds 50 --topk 1 5 10 --seed 42
 
 Usage (on-the-fly encoding):
     python Tests/knn_acc_test.py \
@@ -45,24 +45,7 @@ from Models import VAE, TiltedVAE
 
 # ── Model helpers (same pattern as other tests) ──────────────────────────────
 
-class DinoV2Wrapper(torch.nn.Module):
-    IMAGENET_MEAN = [0.485, 0.456, 0.406]
-    IMAGENET_STD = [0.229, 0.224, 0.225]
-    IMG_SIZE = 224
-
-    def __init__(self, model_name: str = "dinov2_vits14"):
-        super().__init__()
-        self.backbone = torch.hub.load("facebookresearch/dinov2", model_name)
-        self.normalize = T.Normalize(mean=self.IMAGENET_MEAN, std=self.IMAGENET_STD)
-
-    def encode(self, x: torch.Tensor):
-        x = self.normalize(x)
-        return self.backbone(x), None
-
-
 def build_model(args: argparse.Namespace) -> torch.nn.Module:
-    if args.model == "dino":
-        return DinoV2Wrapper()
     if args.model == "tilted":
         return TiltedVAE(in_channels=args.in_channels, latent_dim=args.latent_dim,
                          tau=args.tau, img_size=args.img_size)
@@ -204,7 +187,7 @@ def gather_embeddings_from_model(
     return torch.cat(all_embs, dim=0), torch.tensor(all_labels, dtype=torch.long)
 
 
-# ── KNN accuracy (mirrors DinoV2LoRA._batch_knn_accuracy, generalized to top-k) ─
+# ── KNN accuracy (mirrors the training-time batch kNN, generalized to top-k) ─
 
 @torch.no_grad()
 def topk_knn_accuracy(
@@ -302,7 +285,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--root_dir", default=None, help="Image root directory")
 
     p.add_argument("--checkpoint", default=None, help="Model checkpoint")
-    p.add_argument("--model", default="tilted", choices=["vae", "tilted", "dino"])
+    p.add_argument("--model", default="tilted", choices=["vae", "tilted"])
     p.add_argument("--in_channels", type=int, default=3)
     p.add_argument("--latent_dim", type=int, default=128)
     p.add_argument("--img_size", type=int, default=96)
@@ -333,13 +316,10 @@ def parse_args() -> argparse.Namespace:
     args = p.parse_args()
 
     if args.embedding is None:
-        if args.model != "dino" and args.checkpoint is None:
-            p.error("--checkpoint is required when --embedding is not provided and --model is not dino")
+        if args.checkpoint is None:
+            p.error("--checkpoint is required when --embedding is not provided")
         if args.root_dir is None:
             p.error("--root_dir is required when --embedding is not provided")
-
-    if args.model == "dino":
-        args.img_size = DinoV2Wrapper.IMG_SIZE
 
     return args
 
